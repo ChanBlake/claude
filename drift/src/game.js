@@ -957,6 +957,15 @@ export function boot(){
       g.appendChild(b);
     });
   }
+  /* Some hosts sandbox the page and block a download it starts itself — the
+     browser artifact viewer does — and they block it *without throwing*, so a
+     try/catch around the link reports success when nothing was written. Where
+     the host offers its own save surface, resolve it once at boot and prefer
+     it; everywhere else this stays null and the ordinary link path runs. */
+  let hostSave=null;
+  if(globalThis.claude && typeof globalThis.claude.use==="function")
+    globalThis.claude.use("downloads").then(d=>{hostSave=d;}).catch(()=>{});
+
   const refreshDrone=()=>setDrone(themeFor(ZONES.indexOf(zoneOf(lvl))).drone);
   const isFull=()=>!!(document.fullscreenElement||document.webkitFullscreenElement);
   function toggleFull(){
@@ -1050,20 +1059,26 @@ el("optAmb").addEventListener("input",e=>{save.amb=e.target.value/100;applyOpts(
   el("btnTele").addEventListener("click",async()=>{
   const blob=JSON.stringify({v:1,when:Date.now(),tele:save.tele,
     best:save.best,cleared:save.cleared,cores:save.cores});
-  const b=el("btnTele");
-  // Download first: navigator.clipboard needs a secure context, and a
+  const b=el("btnTele"), NAME="drift-playtest.json";
+  const done=t=>{ b.textContent=t; setTimeout(()=>b.textContent="Export playtest data",2800); };
+  // The host's own save surface, when there is one: it confirms with the viewer
+  // and can be declined, so say which of those happened rather than guessing.
+  if(hostSave){
+    try{ await hostSave.save({filename:NAME,data:blob}); return done("Saved "+NAME); }
+    catch(e){ return done(e && e.code==="declined" ? "Export cancelled" : "Could not save"); }
+  }
+  // Download before clipboard: navigator.clipboard needs a secure context, and a
   // double-clicked file:// page isn't one, so copying silently failed there.
   try{
     const url=URL.createObjectURL(new Blob([blob],{type:"application/json"}));
     const a=document.createElement("a");
-    a.href=url; a.download="drift-playtest.json"; a.click();
+    a.href=url; a.download=NAME; a.click();
     setTimeout(()=>URL.revokeObjectURL(url),1000);
-    b.textContent="Saved drift-playtest.json";
+    done("Saved "+NAME);
   }catch(e){
-    try{ await navigator.clipboard.writeText(blob); b.textContent="Copied to clipboard"; }
-    catch(e2){ console.log(blob); b.textContent="Written to console"; }
+    try{ await navigator.clipboard.writeText(blob); done("Copied to clipboard"); }
+    catch(e2){ console.log(blob); done("Written to console"); }
   }
-  setTimeout(()=>b.textContent="Export playtest data",2800);
 });
 el("btnWipe").addEventListener("click",()=>{
     wipe().then(()=>{buildMenu();titleProgress();});
