@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DRIFT — Sector Editor</title>
+<style>
+  :root{--void:#070912;--void2:#0C1020;--hull:#1A2033;--hull-lit:#2F3A57;
+        --bone:#E8E3D8;--dim:#7C88A6;--oxide:#FF7A5C;--violet:#A78BFA;--teal:#5EE0C8;--amber:#FFC46B}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--void);color:var(--bone);
+    font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    display:flex;gap:16px;padding:16px;min-height:100vh;-webkit-user-select:none;user-select:none}
+  h1{font-size:13px;letter-spacing:.4em;margin:0 0 14px;font-weight:400}
+  .col{display:flex;flex-direction:column;gap:12px}
+  #left{flex:1;min-width:0}
+  #right{width:260px;flex-shrink:0}
+  canvas{border:1px solid var(--hull-lit);background:var(--void2);display:block;
+    width:100%;image-rendering:pixelated;cursor:crosshair}
+  .panel{border:1px solid var(--hull-lit);padding:10px 12px}
+  .lbl{color:var(--dim);font-size:10px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:8px}
+  .palette{display:grid;grid-template-columns:repeat(2,1fr);gap:4px}
+  .pal{display:flex;align-items:center;gap:7px;padding:5px 7px;border:1px solid transparent;
+    cursor:pointer;font-size:11px;color:var(--dim)}
+  .pal:hover{border-color:var(--hull-lit)}
+  .pal.on{border-color:var(--teal);color:var(--bone);background:rgba(94,224,200,.08)}
+  .sw{width:14px;height:14px;flex-shrink:0;border:1px solid rgba(255,255,255,.2)}
+  input,select,textarea{font:inherit;background:var(--void2);color:var(--bone);
+    border:1px solid var(--hull-lit);padding:5px 7px;width:100%}
+  textarea{height:150px;resize:vertical;font-size:10px;line-height:1.45;white-space:pre;overflow-x:auto}
+  button{font:inherit;font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+    background:transparent;color:var(--teal);border:1px solid var(--teal);padding:7px 10px;cursor:pointer}
+  button:hover{background:rgba(94,224,200,.12)}
+  button.ghost{color:var(--dim);border-color:var(--hull-lit)}
+  .row{display:flex;gap:6px;flex-wrap:wrap}
+  .row>*{flex:1}
+  .kitrow{display:flex;gap:5px}
+  .kit{flex:1;text-align:center;padding:5px;border:1px solid var(--hull-lit);color:var(--dim);
+    cursor:pointer;font-size:10px;letter-spacing:.1em}
+  .kit.on{border-color:var(--amber);color:var(--amber)}
+  #verdict{font-size:11px;line-height:1.6;white-space:pre-wrap;min-height:70px}
+  .good{color:var(--teal)} .bad{color:var(--oxide)} .warn{color:var(--amber)}
+  .hintline{color:var(--dim);font-size:10px;line-height:1.5;margin-top:8px}
+  kbd{border:1px solid var(--hull-lit);padding:0 4px;color:var(--bone);font-size:10px}
+</style>
+</head>
+<body>
+<div class="col" id="left">
+  <h1>DRIFT · SECTOR EDITOR</h1>
+  <canvas id="cv" width="800" height="480"></canvas>
+  <div class="panel">
+    <div class="lbl">Verification <span style="float:right;font-size:9px" id="stamp"></span></div>
+    <div id="verdict">—</div>
+    <div class="hintline">
+      Runs the same solver as <kbd>tools/verify.mjs</kbd> on every edit: reachability, cargo pushing,
+      loadout necessity, structure. Plating is treated as permanently solid on purpose — a sector must
+      be solvable without riding a collapse.
+    </div>
+  </div>
+  <div class="panel">
+    <div class="lbl">Export — paste into src/levels.js</div>
+    <textarea id="out" readonly></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="copy">Copy</button>
+      <button id="load" class="ghost">Load a sector</button>
+      <button id="blank" class="ghost">Blank</button>
+    </div>
+  </div>
+</div>
+
+<div class="col" id="right">
+  <div class="panel">
+    <div class="lbl">Sector</div>
+    <input id="name" placeholder="NAME" value="NEW SECTOR">
+    <div style="height:6px"></div>
+    <input id="hint" placeholder="Hint shown on the card">
+    <div style="height:6px"></div>
+    <div class="row">
+      <input id="par" type="number" min="5" step="5" value="60" title="par seconds">
+      <select id="pick"></select>
+    </div>
+    <div class="lbl" style="margin:12px 0 6px">Loadout issued</div>
+    <div class="kitrow">
+      <div class="kit" data-k="B">BURST</div>
+      <div class="kit" data-k="F">FLIP</div>
+      <div class="kit" data-k="R">REWIND</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="lbl">Palette</div>
+    <div class="palette" id="pal"></div>
+    <div class="hintline">
+      Drag to paint · <kbd>right-click</kbd> erases · <kbd>1</kbd>–<kbd>9</kbd> pick ·
+      <kbd>Z</kbd> undo. Spawn and airlock are unique — placing one moves it.
+      This edits a single 25×15 <b>chamber</b>; sectors are three or four of them
+      joined in <kbd>tools/compose.py</kbd>.
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { LEVELS, ZONES, zoneOf } from "../src/levels.js";
+import { VCOLS as COLS, VROWS as ROWS, TILE, reach } from "../src/config.js";
+
+const R = reach();
+const ENV = {
+  noBurst:{up:Math.floor(R.singleTiles), span:Math.floor(R.singleSpan)},
+  burst:{up:Math.floor(R.doubleTiles), span:Math.floor(R.doubleSpan)},
+};
+
+/* ── palette ─────────────────────────────────────────── */
+const PAL = [
+  {ch:".", name:"empty",    col:"#0C1020"},
+  {ch:"#", name:"hull",     col:"#2F3A57"},
+  {ch:":", name:"false wall",col:"#3A4468"},
+  {ch:"-", name:"drop-thru",col:"#46557E"},
+  {ch:"~", name:"brittle",  col:"#A78BFA"},
+  {ch:"^", name:"hazard",   col:"#FF7A5C"},
+  {ch:"Z", name:"null field",col:"#2E6F66"},
+  {ch:"=", name:"lattice α",col:"#FFC46B"},
+  {ch:"%", name:"lattice β",col:"#8B6FD8"},
+  {ch:"T", name:"coupler",  col:"#D9A94E"},
+  {ch:">", name:"belt →",   col:"#2C5544"},
+  {ch:"<", name:"belt ←",   col:"#2C5544"},
+  {ch:"X", name:"projector",col:"#5EE0C8"},
+  {ch:"D", name:"door",     col:"#FFC46B"},
+  {ch:"S", name:"switch",   col:"#5EE0C8"},
+  {ch:"B", name:"plate",    col:"#3E9E8C"},
+  {ch:"A", name:"cargo ⚓",  col:"#A78BFA"},
+  {ch:"C", name:"cargo",    col:"#8C97B4"},
+  {ch:"o", name:"data core",col:"#FFC46B"},
+  {ch:"P", name:"spawn",    col:"#E8E3D8"},
+  {ch:"E", name:"airlock",  col:"#5EE0C8"},
+];
+let brush="#", kit="", undo=[];
+
+function blankGrid(){
+  const g=[];
+  for(let r=0;r<ROWS;r++){
+    const row=[];
+    for(let c=0;c<COLS;c++) row.push(r===0||r===ROWS-1||c===0||c===COLS-1?"#":".");
+    g.push(row);
+  }
+  g[ROWS-2][1]="P"; g[1][COLS-2]="E";
+  return g;
+}
+let grid=blankGrid();
+
+/* ── solver (same rules as tools/verify.mjs) ─────────── */
+const at=(g,c,r)=> c<0||c>=COLS||r<0||r>=ROWS ? "#" : g[r][c];
+const blocking=(g,c,r,ph)=>{const t=at(g,c,r);return t==="#"||t==="~"||t===">"||t==="<"||(t==="="&&ph===0)||(t==="%"&&ph===1);}; // ':' passable; belts are solid floor
+const standable=(g,c,r,ph)=> blocking(g,c,r,ph)||at(g,c,r)==="-";
+const free=(g,c,r,ph)=> c>=0&&c<COLS&&r>=0&&r<ROWS&&!blocking(g,c,r,ph)&&at(g,c,r)!=="^";
+const field=(g,c,r)=> at(g,c,r)==="Z";
+
+function explore(g,kit){
+  const burst=kit.includes("B"), flip=kit.includes("F");
+  const {up:UP,span:SPAN}= burst?ENV.burst:ENV.noBurst;
+  const clear=(c0,r0,c1,r1,ph)=>{
+    const v=(c,a,b)=>{for(let t=Math.min(a,b);t<=Math.max(a,b);t++) if(!free(g,c,t,ph))return false;return true;};
+    const h=(r,a,b)=>{for(let t=Math.min(a,b);t<=Math.max(a,b);t++) if(!free(g,t,r,ph))return false;return true;};
+    return (v(c0,r0,r1)&&h(r1,c0,c1))||(h(r0,c0,c1)&&v(c1,r0,r1));
+  };
+  let start=null;
+  for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++) if(g[r][c]==="P") start=[c,r];
+  if(!start) return {seen:new Set(),seenPh:new Set()};
+  const K=(c,r,gd,ph)=>`${c},${r},${gd},${ph}`;
+  const st=new Set([K(start[0],start[1],1,0)]), q=[[start[0],start[1],1,0]];
+  while(q.length){
+    const [c,r,gd,ph]=q.shift();
+    const add=(nc,nr,ngd,nph)=>{
+      if(!free(g,nc,nr,nph))return;
+      const k=K(nc,nr,ngd,nph); if(st.has(k))return; st.add(k); q.push([nc,nr,ngd,nph]);
+    };
+    if(at(g,c,r)==="T") add(c,r,gd,1-ph);
+    if(flip) add(c,r,-gd,ph);
+    if(field(g,c,r)){ add(c+1,r,gd,ph);add(c-1,r,gd,ph);add(c,r+1,gd,ph);add(c,r-1,gd,ph); continue; }
+    if(!standable(g,c,r+gd,ph)){
+      let nr=r+gd;
+      while(free(g,c,nr,ph)&&!standable(g,c,nr,ph)&&!field(g,c,nr)) nr+=gd;
+      if(field(g,c,nr)) add(c,nr,gd,ph); else add(c,nr-gd,gd,ph);
+      continue;
+    }
+    add(c-1,r,gd,ph); add(c+1,r,gd,ph);
+    for(let dv=0;dv<=UP;dv++) for(let dh=-SPAN;dh<=SPAN;dh++){
+      const nc=c+dh,nr=r-dv*gd;
+      if(free(g,nc,nr,ph)&&clear(c,r,nc,nr,ph)) add(nc,nr,gd,ph);
+    }
+  }
+  const seen=new Set(), seenPh=new Set();
+  for(const k of st){ const p=k.split(","); seen.add(p[0]+","+p[1]); seenPh.add(p[0]+","+p[1]+","+p[3]); }
+  return {seen,seenPh};
+}
+
+function cargoProblems(g,seenPh){
+  const plates=[],cargo=[];
+  for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+    if(g[r][c]==="B") plates.push(c+","+r);
+    if(g[r][c]==="A"||g[r][c]==="C") cargo.push([c,r]);
+  }
+  if(!plates.length) return [];
+  if(!cargo.length) return ["plate with no cargo"];
+  const phases=[...new Set([...seenPh].map(k=>+k.split(",")[2]))];
+  const out=[];
+  for(const [sc,sr] of cargo){
+    let ok=false;
+    for(const ph of phases){
+      const settle=(c,r)=>{while(!standable(g,c,r+1,ph))r++;return [c,r];};
+      const [c0,r0]=settle(sc,sr); const seen=new Set([c0+","+r0]); const q=[[c0,r0]];
+      while(q.length){
+        const [c,r]=q.shift();
+        if(plates.includes(c+","+r)){ok=true;break;}
+        for(const d of [-1,1]){
+          if(blocking(g,c+d,r,ph)) continue;
+          if(!seenPh.has((c-d)+","+r+","+ph)) continue;
+          const [nc,nr]=settle(c+d,r), k=nc+","+nr;
+          if(!seen.has(k)){seen.add(k);q.push([nc,nr]);}
+        }
+      }
+      if(ok) break;
+    }
+    if(!ok) out.push(`cargo (${sc},${sr}) can't reach a plate`);
+  }
+  return out;
+}
+
+function structural(g){
+  const e=[], flat=g.map(r=>r.join("")).join("");
+  const n=ch=>flat.split(ch).length-1;
+  if(n("P")!==1) e.push(`${n("P")} spawns (need 1)`);
+  if(n("E")!==1) e.push(`${n("E")} airlocks (need 1)`);
+  if(n("D")&&!(n("S")+n("B"))) e.push("door with nothing to open it");
+  if((n("=")||n("%"))&&!n("T")) e.push("lattice with no coupler");
+  if(n("B")&&!(n("A")+n("C"))) e.push("plate with no cargo");
+  if(g[0].some(c=>c!=="#")||g[ROWS-1].some(c=>c!=="#")||g.some(r=>r[0]!=="#"||r[COLS-1]!=="#"))
+    e.push("border is not sealed");
+  return e;
+}
+
+function verify(){
+  const errs=structural(grid);
+  const {seen,seenPh}=explore(grid,kit);
+  const lost=[]; let cores=0,lostCores=0;
+  for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+    const t=grid[r][c];
+    if(t==="o"){cores++; if(!seen.has(c+","+r))lostCores++;}
+    else if("SBEAC".includes(t)&&!seen.has(c+","+r)) lost.push(`${t}(${c},${r})`);
+  }
+  if(lost.length) errs.push("unreachable: "+lost.join(" "));
+  errs.push(...cargoProblems(grid,seenPh));
+  if(lostCores) errs.push(`${lostCores} unreachable core(s)`);
+
+  const redundant=[];
+  if(!errs.length){
+    for(const [ch,label] of [["B","burst"],["F","flip"]]){
+      if(!kit.includes(ch)) continue;
+      const w=kit.replace(ch,"");
+      const r2=explore(grid,w);
+      let bad=false;
+      for(let r=0;r<ROWS&&!bad;r++)for(let c=0;c<COLS;c++)
+        if("SBEAC".includes(grid[r][c])&&!r2.seen.has(c+","+r)){bad=true;break;}
+      if(!bad&&cargoProblems(grid,r2.seenPh).length) bad=true;
+      if(!bad) redundant.push(label);
+    }
+  }
+  return {errs,redundant,seen,cores,lostCores};
+}
+
+/* ── draw ────────────────────────────────────────────── */
+const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
+function draw(seen){
+  ctx.fillStyle="#0C1020"; ctx.fillRect(0,0,cv.width,cv.height);
+  for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+    const x=c*TILE,y=r*TILE,ch=grid[r][c];
+    if(seen&&seen.has(c+","+r)){ ctx.fillStyle="rgba(94,224,200,.07)"; ctx.fillRect(x,y,TILE,TILE); }
+    const p=PAL.find(p=>p.ch===ch);
+    if(ch!=="."&&p){
+      if(ch==="Z"){ ctx.fillStyle="rgba(94,224,200,.10)"; ctx.fillRect(x,y,TILE,TILE);
+        ctx.fillStyle="rgba(94,224,200,.5)"; ctx.fillRect(x+14,y+14,3,3); }
+      else if(ch==="-"){ ctx.fillStyle=p.col; ctx.fillRect(x,y,TILE,6); }
+      else if(ch==="="||ch==="%"){ ctx.strokeStyle=p.col; ctx.lineWidth=2; ctx.strokeRect(x+2,y+2,TILE-4,TILE-4);
+        ctx.fillStyle=p.col+"22"; ctx.fillRect(x+2,y+2,TILE-4,TILE-4); }
+      else if("SBTAoCEP".includes(ch)){
+        ctx.fillStyle=p.col; ctx.beginPath(); ctx.arc(x+16,y+16,9,0,7); ctx.fill();
+        ctx.fillStyle="#070912"; ctx.font="10px monospace"; ctx.textAlign="center";
+        ctx.fillText(ch,x+16,y+20);
+      }
+      else { ctx.fillStyle=p.col; ctx.fillRect(x+1,y+1,TILE-2,TILE-2); }
+    }
+    ctx.strokeStyle="rgba(47,58,87,.35)"; ctx.lineWidth=1; ctx.strokeRect(x+.5,y+.5,TILE,TILE);
+  }
+}
+
+function exportText(){
+  const name=document.getElementById("name").value.trim()||"UNNAMED";
+  const hint=document.getElementById("hint").value.trim();
+  const par=+document.getElementById("par").value||60;
+  const rows=grid.map(r=>`"${r.join("")}"`).join(",\n");
+  return `{name:${JSON.stringify(name)},kit:${JSON.stringify(kit)},par:${par},hint:${JSON.stringify(hint)},rows:[\n${rows}]},`;
+}
+
+function refresh(){
+  const v=verify();
+  draw(v.seen);
+  const el=document.getElementById("verdict");
+  const bits=[];
+  if(v.errs.length) bits.push(`<span class="bad">BROKEN</span>\n  ${v.errs.join("\n  ")}`);
+  else if(v.redundant.length) bits.push(`<span class="warn">SOLVABLE, but issues gear it doesn't need: ${v.redundant.join(", ")}</span>\n  Remove it and the sector still solves — that's a free pass for the player.`);
+  else bits.push(`<span class="good">SOLVABLE</span>  every issued ability is load-bearing`);
+  bits.push(`<span style="color:var(--dim)">reachable tiles ${v.seen.size} · cores ${v.cores-v.lostCores}/${v.cores}</span>`);
+  el.innerHTML=bits.join("\n");
+  document.getElementById("stamp").textContent=new Date().toLocaleTimeString();
+  document.getElementById("out").value=exportText();
+}
+
+/* ── interaction ─────────────────────────────────────── */
+function paint(e,erase){
+  const b=cv.getBoundingClientRect();
+  const c=Math.floor((e.clientX-b.left)/b.width*COLS);
+  const r=Math.floor((e.clientY-b.top)/b.height*ROWS);
+  if(c<0||c>=COLS||r<0||r>=ROWS) return;
+  const ch=erase?".":brush;
+  if(grid[r][c]===ch) return;
+  if(ch==="P"||ch==="E")
+    for(let rr=0;rr<ROWS;rr++)for(let cc=0;cc<COLS;cc++) if(grid[rr][cc]===ch) grid[rr][cc]=".";
+  grid[r][c]=ch;
+  refresh();
+}
+let down=false;
+cv.addEventListener("contextmenu",e=>e.preventDefault());
+cv.addEventListener("pointerdown",e=>{down=true;undo.push(grid.map(r=>[...r]));if(undo.length>60)undo.shift();paint(e,e.button===2);});
+addEventListener("pointerup",()=>down=false);
+cv.addEventListener("pointermove",e=>{if(down)paint(e,e.buttons===2);});
+addEventListener("keydown",e=>{
+  if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA") return;
+  if(e.key==="z"&&undo.length){grid=undo.pop();refresh();}
+  const n=parseInt(e.key,10);
+  if(n>=1&&n<=9&&PAL[n-1]){brush=PAL[n-1].ch;buildPal();refresh();}
+});
+
+function buildPal(){
+  const p=document.getElementById("pal"); p.innerHTML="";
+  PAL.forEach(x=>{
+    const d=document.createElement("div");
+    d.className="pal"+(brush===x.ch?" on":"");
+    d.innerHTML=`<span class="sw" style="background:${x.col}"></span>${x.name}`;
+    d.onclick=()=>{brush=x.ch;buildPal();};
+    p.appendChild(d);
+  });
+}
+document.querySelectorAll(".kit").forEach(k=>{
+  k.onclick=()=>{
+    const ch=k.dataset.k;
+    kit = kit.includes(ch) ? kit.replace(ch,"") : (kit+ch).split("").sort().join("");
+    document.querySelectorAll(".kit").forEach(x=>x.classList.toggle("on",kit.includes(x.dataset.k)));
+    refresh();
+  };
+});
+const pick=document.getElementById("pick");
+pick.innerHTML=`<option value="">load…</option>`+
+  LEVELS.map((L,i)=>`<option value="${i}">${String(i+1).padStart(2,"0")} ${L.name}</option>`).join("");
+function loadSector(i){
+  const L=LEVELS[i];
+  grid=L.rows.map(r=>r.split(""));
+  kit=L.kit||"";
+  document.getElementById("name").value=L.name;
+  document.getElementById("hint").value=L.hint;
+  document.getElementById("par").value=L.par;
+  document.querySelectorAll(".kit").forEach(x=>x.classList.toggle("on",kit.includes(x.dataset.k)));
+  refresh();
+}
+document.getElementById("load").onclick=()=>{ if(pick.value!=="") loadSector(+pick.value); };
+pick.onchange=()=>{ if(pick.value!=="") loadSector(+pick.value); };
+document.getElementById("blank").onclick=()=>{grid=blankGrid();refresh();};
+document.getElementById("copy").onclick=()=>{
+  navigator.clipboard.writeText(exportText());
+  const b=document.getElementById("copy"); b.textContent="Copied"; setTimeout(()=>b.textContent="Copy",1200);
+};
+["name","hint","par"].forEach(id=>document.getElementById(id).addEventListener("input",refresh));
+
+buildPal(); refresh();
+</script>
+</body>
+</html>

@@ -1,0 +1,2086 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="DRIFT — a sci-fi puzzle platformer about rewinding time, inverting gravity, and one-way decisions.">
+<title>DRIFT — Station Salvage</title>
+<style>
+/* DRIFT — presentation. No images, no webfonts: the whole look is CSS + canvas. */
+:root{
+    --void:#070912; --void2:#0C1020;
+    --hull:#1A2033; --hull-lit:#2F3A57; --hull-deep:#11162a;
+    --bone:#E8E3D8; --dim:#7C88A6;
+    --oxide:#FF7A5C; --violet:#A78BFA; --teal:#5EE0C8; --amber:#FFC46B;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;color:var(--bone);
+    background:radial-gradient(1200px 620px at 50% -12%,#141a30 0%,rgba(7,9,18,0) 60%),var(--void);
+    font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    display:flex;align-items:center;justify-content:center;min-height:100dvh;padding:14px;
+    -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
+  }
+  #shell{width:100%;max-width:940px}
+  #frame{
+    position:relative;width:100%;aspect-ratio:5/3;
+    border:1px solid var(--hull-lit);border-radius:3px;background:var(--void2);overflow:hidden;
+    box-shadow:0 0 0 1px #000,0 30px 70px -24px #000,inset 0 0 90px -30px #000;
+  }
+  canvas{display:block;width:100%;height:100%}
+
+  #hud{position:absolute;inset:0;pointer-events:none;font-size:11px;letter-spacing:.14em}
+  .hudrow{position:absolute;left:0;right:0;display:flex;gap:10px;align-items:center;padding:8px 12px;text-transform:uppercase}
+  #hudTop{top:0;background:linear-gradient(180deg,rgba(7,9,18,.94),rgba(7,9,18,0))}
+  #hudBot{bottom:0;background:linear-gradient(0deg,rgba(7,9,18,.94),rgba(7,9,18,0));font-size:10px;color:var(--dim)}
+  .tag{color:var(--dim)}
+  #zone{color:var(--dim);font-size:10px;white-space:nowrap}
+  #lvlName{color:var(--bone);letter-spacing:.22em;white-space:nowrap}
+  #clock{margin-left:auto;color:var(--dim);letter-spacing:.16em}
+  #hint{position:absolute;left:12px;right:12px;top:30px;color:var(--amber);font-size:11px;
+        letter-spacing:.04em;text-transform:none;line-height:1.4;text-align:right;
+        opacity:.95;transition:opacity .4s}
+  #hint.off{opacity:0}
+  /* Outside the teaching zone the readout drops to the essentials: buffer,
+     loadout, reset. The labels come off — by then you know what they are. */
+  #hudBot.quiet .tag,#hudBot.quiet .lblword{display:none}
+  #hudBot.quiet{opacity:.62}
+  #hudBot.quiet:hover{opacity:1}
+  .chip{border:1px solid var(--hull-lit);padding:2px 7px;color:var(--dim);white-space:nowrap}
+  .chip.on{color:var(--teal);border-color:var(--teal)}
+  .chip.locked{color:#3E4763;border-color:#242C44;text-decoration:line-through}
+  .chip.deny{color:var(--oxide);border-color:var(--oxide);text-decoration:none}
+  .chip.act{pointer-events:auto;cursor:pointer;font:inherit;font-size:10px;letter-spacing:.14em;
+    background:transparent;border:1px solid var(--hull-lit);color:var(--dim);padding:2px 7px;text-transform:uppercase}
+  .chip.act:hover{border-color:var(--amber);color:var(--amber)}
+  #bufWrap{width:96px;height:5px;background:#161b2b;border:1px solid var(--hull-lit);position:relative;overflow:hidden}
+  #bufWrap.locked{opacity:.3}
+  #bufFill{position:absolute;inset:0;width:0%;background:var(--violet)}
+  #bufFill.low{background:var(--oxide)}
+  #coreDot{color:#3E4763;letter-spacing:.2em}
+  #coreDot.got{color:var(--amber)}
+  #nudge{position:absolute;left:0;right:0;bottom:34px;text-align:center;color:var(--amber);
+    font-size:11px;letter-spacing:.06em;text-transform:none;opacity:0;transition:opacity .5s}
+  #nudge.show{opacity:.9}
+  #nudge b{color:var(--bone);font-weight:400}
+
+  /* Overlays centre their content, but a CENTRED flex container that overflows
+     puts its first items above the scroll origin — they become unreachable, and
+     the sector list got long enough for that to bite. Anchoring to the start and
+     letting two auto-margin pseudo-elements absorb the slack keeps it centred
+     when it fits and scrollable from the very top when it doesn't. */
+  .screen{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;
+    justify-content:flex-start;
+    gap:14px;text-align:center;background:rgba(7,9,18,.95);pointer-events:auto;
+    padding:20px;overflow-y:auto;overscroll-behavior:contain}
+  .screen.show{display:flex}
+  .screen::before,.screen::after{content:"";margin:auto;flex:0 0 0}
+  /* a hairline so it's obvious there's more below the fold */
+  .screen::-webkit-scrollbar{width:8px}
+  .screen::-webkit-scrollbar-thumb{background:var(--hull-lit);border-radius:4px}
+  .screen::-webkit-scrollbar-track{background:transparent}
+  .title{font-size:clamp(30px,7vw,58px);letter-spacing:.44em;margin:0 0 0 .44em;font-weight:400}
+  .sub{color:var(--dim);font-size:11px;letter-spacing:.24em;text-transform:uppercase}
+  .keys{display:grid;grid-template-columns:auto auto;gap:5px 18px;font-size:12px;color:var(--dim);letter-spacing:.08em;text-align:left}
+  .keys b{color:var(--bone);font-weight:400}
+  button{font:inherit;font-size:11px;letter-spacing:.2em;text-transform:uppercase;background:transparent;
+    color:var(--teal);border:1px solid var(--teal);padding:9px 18px;cursor:pointer}
+  button:hover{background:rgba(94,224,200,.12)}
+  button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+  .ghost{color:var(--dim);border-color:var(--hull-lit)}
+  /* With 30 sectors the list runs past the frame, so the controls are pinned —
+     Resume should never require scrolling to find. */
+  .row.actions{position:sticky;bottom:-20px;padding:10px 0 4px;margin-top:auto;
+    background:linear-gradient(0deg,rgba(7,9,18,.99) 60%,rgba(7,9,18,0));width:100%;z-index:2}
+  .ghost:hover{background:rgba(124,136,166,.1)}
+
+  #lvlGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:4px;
+    width:100%;max-width:780px}
+  .lvlBtn{text-align:left;padding:5px 7px;border:1px solid var(--hull-lit);color:var(--dim);background:transparent;
+    cursor:pointer;letter-spacing:.02em;text-transform:none;font-size:9px;line-height:1.3}
+  .lvlBtn b{display:block;color:var(--bone);letter-spacing:.14em;text-transform:uppercase;font-size:9px;margin-bottom:2px}
+  .lvlBtn:hover{border-color:var(--teal);color:var(--bone)}
+  .lvlBtn .mk{float:right;letter-spacing:0}
+  .lvlBtn.done{border-color:#2B4A46}
+  .lvlBtn.done b:after{content:" ✓";color:var(--teal)}
+  .zhead{grid-column:1/-1;color:var(--dim);font-size:9px;letter-spacing:.24em;text-transform:uppercase;
+    margin-top:5px;border-bottom:1px solid var(--hull-lit);padding-bottom:3px;
+    position:sticky;top:-20px;background:rgba(7,9,18,.97);z-index:1}
+
+  #cardZone{color:var(--teal)}
+  #cardTitle{font-size:clamp(20px,4vw,28px);letter-spacing:.3em}
+  #cardHint{color:var(--amber);font-size:13px;max-width:460px;line-height:1.7}
+  #cardLog{color:var(--dim);font-size:11px;max-width:440px;line-height:1.7;font-style:italic;letter-spacing:.02em}
+  .optrow{display:flex;align-items:center;gap:14px;font-size:11px;letter-spacing:.14em;
+    color:var(--dim);text-transform:uppercase;width:100%;max-width:380px;justify-content:space-between}
+  .optrow b{color:var(--bone);font-weight:400;min-width:74px;text-align:right}
+  input[type=range]{flex:1;accent-color:var(--teal);background:transparent}
+  .tog{cursor:pointer;border:1px solid var(--hull-lit);color:var(--dim);padding:3px 10px;font-size:10px;letter-spacing:.14em}
+  .tog.on{color:var(--teal);border-color:var(--teal)}
+  .statgrid{display:grid;grid-template-columns:auto auto;gap:4px 22px;font-size:12px;color:var(--dim);letter-spacing:.1em}
+  .statgrid b{color:var(--bone);font-weight:400;text-align:right}
+
+  #touch{position:absolute;inset:0;display:none;pointer-events:none}
+  #touch.on{display:block}
+  .tbtn{position:absolute;pointer-events:auto;border:1px solid rgba(232,227,216,.3);
+    background:rgba(12,16,32,.45);color:var(--bone);border-radius:6px;
+    display:flex;align-items:center;justify-content:center;font-size:12px;letter-spacing:.08em;
+    width:50px;height:50px;backdrop-filter:blur(2px)}
+  .tbtn:active{background:rgba(94,224,200,.25)}
+  #tL{left:8px;bottom:12px} #tR{left:64px;bottom:12px} #tD{left:36px;bottom:68px}
+  #tJ{right:8px;bottom:12px} #tF{right:64px;bottom:12px}
+  #tW{right:8px;bottom:68px} #tK{right:64px;bottom:68px}
+  #below{margin-top:10px;color:var(--dim);font-size:10px;letter-spacing:.12em;text-align:center;text-transform:uppercase}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+</style>
+</head>
+<body>
+<div id="shell">
+  <div id="frame">
+    <canvas id="cv" width="800" height="480"></canvas>
+    
+
+    <div id="hud">
+      <div class="hudrow" id="hudTop">
+        <span id="zone">ZONE I · HULL</span>
+        <span class="tag" id="lvlNum">01</span>
+        <span id="lvlName">COLD BOOT</span>
+        <span id="clock">0:00</span>
+      </div>
+      <div id="hint"></div>
+      <div class="hudrow" id="hudBot">
+        <span class="tag">BUF</span><div id="bufWrap"><div id="bufFill"></div></div>
+        <span class="chip" id="chipBurst">BURST</span>
+        <span class="chip" id="chipFlip">FLIP ↓</span>
+        <span class="chip" id="chipRwd">RWND</span>
+        <button class="chip act" id="btnReset" type="button">⟲ RESET</button>
+        <span id="coreDot" style="margin-left:auto">◆<span class="lblword"> CORE</span></span>
+        <span><span class="lblword">LOSS </span><b id="deaths" style="color:var(--oxide)">0</b></span>
+      </div>
+      <div id="nudge">Stuck? <b>⟲ RESET</b> or <b>K</b> restarts this sector</div>
+    </div>
+
+    <div id="touch">
+      <div class="tbtn" id="tL">◀</div><div class="tbtn" id="tR">▶</div><div class="tbtn" id="tD">▼</div>
+      <div class="tbtn" id="tJ">JUMP</div><div class="tbtn" id="tF">FLIP</div>
+      <div class="tbtn" id="tW">RWND</div><div class="tbtn" id="tK">⟲</div>
+    </div>
+
+    <div class="screen show" id="scrTitle">
+      <h1 class="title">DRIFT</h1>
+      <div class="sub">Station Salvage</div>
+      <div class="sub" id="titleProg" style="color:var(--teal)"></div>
+      <div class="keys">
+        <span><b>A / D</b></span><span>walk &nbsp;·&nbsp; <b>S</b> drop through plating</span>
+        <span><b>SPACE</b></span><span>jump — tap again mid-air for the suit burst</span>
+        <span><b>F</b></span><span>invert gravity</span>
+        <span><b>R</b> (hold)</span><span>rewind time</span>
+        <span><b>W A S D</b></span><span>thrust, inside null fields</span>
+        <span><b>K</b> · <b>ESC</b></span><span>restart sector · pause</span>
+      </div>
+      <div class="sub" style="color:var(--amber);letter-spacing:.08em;text-transform:none">
+        Each sector issues its own loadout. Locked gear stays locked.</div>
+      <div class="row">
+        <button id="btnStart">Begin</button>
+        <button id="btnCont" class="ghost">Continue</button>
+        <button id="btnSel" class="ghost">Sectors</button>
+        <button id="btnOpt" class="ghost">Settings</button>
+      </div>
+    </div>
+
+    <div class="screen" id="scrCard">
+      <div class="sub" id="cardZone">ZONE I · HULL</div>
+      <div class="sub" id="cardNum">SECTOR 01</div>
+      <div id="cardTitle">COLD BOOT</div>
+      <div id="cardLog"></div>
+      <div id="cardHint"></div>
+      <div class="sub" id="cardKit"></div>
+      <div class="sub" style="color:var(--hull-lit)">press any key</div>
+    </div>
+
+    <div class="screen" id="scrMenu">
+      <div class="sub">Sector list</div>
+      <div id="lvlGrid"></div>
+      <div class="row actions">
+        <button id="btnResume">Resume</button>
+        <button id="btnRestart" class="ghost" style="color:var(--amber);border-color:var(--amber)">Reset sector</button>
+        <button id="btnOpt2" class="ghost">Settings</button>
+        <button id="btnQuit" class="ghost">Title</button>
+      </div>
+    </div>
+
+    <div class="screen" id="scrOpt">
+      <div class="sub">Settings</div>
+      <div class="optrow"><span>Volume</span><input type="range" id="optVol" min="0" max="100" step="5"><b id="volVal">100%</b></div>
+      <div class="optrow"><span>Ambience</span><input type="range" id="optAmb" min="0" max="100" step="5"><b id="ambVal">35%</b></div>
+      <div class="optrow"><span>Screen shake</span><span></span><div class="tog on" id="optShake">On</div></div>
+      <div class="optrow"><span>Assist mode</span><span></span><div class="tog" id="optAssist">Off</div></div>
+      <div class="sub" style="text-transform:none;letter-spacing:.02em;max-width:400px;line-height:1.6;color:var(--dim)">
+        Assist mode triples the rewind buffer and shrinks your hazard hitbox. It never changes a sector's loadout,
+        so every puzzle still solves the same way.</div>
+      <div class="sub" id="saveState" style="text-transform:none;letter-spacing:.02em"></div>
+      <div class="row">
+        <button id="btnOptBack">Back</button>
+        <button id="btnTele" class="ghost">Export playtest data</button>
+        <button id="btnWipe" class="ghost" style="color:var(--oxide);border-color:var(--oxide)">Erase progress</button>
+      </div>
+    </div>
+
+    <div class="screen" id="scrEnd">
+      <h1 class="title" style="font-size:clamp(20px,4vw,32px)">SALVAGE COMPLETE</h1>
+      <div class="statgrid">
+        <span>Sectors cleared</span><b id="endSec">0 / 24</b>
+        <span>Data cores</span><b id="endCore">0 / 24</b>
+        <span>Run time</span><b id="endTime">0:00</b>
+        <span>Losses</span><b id="endDeaths">0</b>
+      </div>
+      <div class="sub" id="endRank" style="color:var(--amber)"></div>
+      <div class="row">
+        <button id="btnAgain">Run it again</button>
+        <button id="btnEndSel" class="ghost">Sectors</button>
+      </div>
+    </div>
+  </div>
+  <div id="below">Rewind restores you and loose cargo · latched switches, phase state, anchored cargo and spent plating stay as they are</div>
+</div>
+<script>
+(() => {
+"use strict";
+
+/* ── config.js ─────────────────────────────── */
+/* DRIFT — tuning. Every number the verifier depends on lives here.
+   tools/verify.mjs re-derives the jump envelope from these, so changing
+   JUMP or GRAV automatically re-checks all 24 sectors against the new reach. */
+
+const TILE=32;
+/* The VIEWPORT is a fixed 25x15 tiles. Level grids are no longer tied to it —
+   a sector declares its own width and height and the camera scrolls to fit. */
+const VCOLS=25, VROWS=15;
+const W=VCOLS*TILE, H=VROWS*TILE;
+
+/* Camera. The deadzone is what keeps the view from twitching on every small
+   step; the lerp is what keeps it from snapping when you cross the edge of it. */
+const CAM_DEADZONE_X=140, CAM_DEADZONE_Y=90;
+const CAM_LERP=.11, CAM_LOOKAHEAD=46;
+
+const GRAV=.5, MAXFALL=12;
+const RUN=3.4, ACC=.8, FRIC=.72;
+const JUMP=10.5, BURST_SCALE=.96, CUT=4.2;
+const ZG_THRUST=.30, ZG_DRAG=.965, ZG_MAX=3.3;
+
+const BASE_BUFFER=1800;   // frames of rewind history (30s at 60fps)
+const REWIND_SPEED=2;     // history frames consumed per tick
+const COYOTE=6, JBUF=7;   // forgiveness windows
+const FUSE=48;            // frames before brittle plating gives way
+const ASSIST_BUFFER=3;    // buffer multiplier in assist mode
+
+/* Derived reach — used by the verifier and by level design.
+   Recomputed rather than hardcoded so tuning changes can't silently
+   invalidate a sector that was built against the old envelope. */
+function reach(){
+  const rise=v=>{let y=0,vy=-v;while(vy<0){y+=vy;vy+=GRAV;}return -y;};
+  const air=v=>{let y=0,vy=-v,f=0;while(y<=0||f<2){y+=vy;vy+=GRAV;f++;if(y>=0&&f>2)break;}return f;};
+  const h1=rise(JUMP), h2=h1+rise(JUMP*BURST_SCALE);
+  return {
+    singleRise:h1, doubleRise:h2,
+    singleTiles:h1/TILE, doubleTiles:h2/TILE,
+    singleSpan:air(JUMP)*RUN/TILE, doubleSpan:air(JUMP)*1.7*RUN/TILE
+  };
+}
+
+/* ── themes.js ─────────────────────────────── */
+/* DRIFT — per-zone visual identity.
+ *
+ * Every zone used to render identically and differ only by a drone pitch, which
+ * meant progress never *felt* like progress. Each zone now owns a palette, a
+ * sky, a hull treatment and a hazard colour, so you can tell where you are from
+ * a glance at a screenshot.
+ *
+ * These are presentation only. Nothing here changes collision, reach, or
+ * anything the verifier depends on — a theme can never make a sector unsolvable.
+ */
+const THEMES = [
+  { // I · HULL — cold, intact, powered down. The baseline everything reads against.
+    sky:      "#070912",
+    glow:     "rgba(30,42,74,.30)",
+    hull:     "#1A2033", hullIn: "#11162a", hullEdge: "#2F3A57",
+    grid:     "rgba(47,58,87,.14)",
+    star:     "#9FB0D8", starCount: 80, starAlpha: 1,
+    hazard:   "#FF7A5C",
+    rivet:    "rgba(167,139,250,.10)",
+    vignette: .45,
+    drone:    46,
+  },
+  { // II · CARGO — warmer, dirtier, industrial. Amber worklights still running.
+    sky:      "#0A0A10",
+    glow:     "rgba(74,58,30,.26)",
+    hull:     "#22201C", hullIn: "#14120F", hullEdge: "#4A4232",
+    grid:     "rgba(74,66,50,.16)",
+    star:     "#C8B590", starCount: 46, starAlpha: .8,
+    hazard:   "#FF7A5C",
+    rivet:    "rgba(255,196,107,.13)",
+    vignette: .52,
+    drone:    53,
+  },
+  { // III · CORE — irradiated violet. The lattice bleeding into the walls.
+    sky:      "#0A0714",
+    glow:     "rgba(70,40,110,.30)",
+    hull:     "#1F1830", hullIn: "#140F22", hullEdge: "#493A6B",
+    grid:     "rgba(73,58,107,.17)",
+    star:     "#C2A8F0", starCount: 62, starAlpha: .85,
+    hazard:   "#FF6BA0",
+    rivet:    "rgba(167,139,250,.20)",
+    vignette: .58,
+    drone:    60,
+  },
+  { // IV · VOID — almost no hull left. Deep, cold, and very empty.
+    sky:      "#04060E",
+    glow:     "rgba(20,60,74,.24)",
+    hull:     "#141D26", hullIn: "#0B1119", hullEdge: "#27414E",
+    grid:     "rgba(39,65,78,.13)",
+    star:     "#CFE6F5", starCount: 130, starAlpha: 1.15,
+    hazard:   "#FF8A6B",
+    rivet:    "rgba(94,224,200,.12)",
+    vignette: .62,
+    drone:    41,
+  },
+  { // V · RELAY — the outbound station. Live power, green signal, machinery moving.
+    sky:      "#05100C",
+    glow:     "rgba(24,80,58,.26)",
+    hull:     "#152620", hullIn: "#0C1712", hullEdge: "#2C5544",
+    grid:     "rgba(44,85,68,.16)",
+    star:     "#A7E8C8", starCount: 70, starAlpha: .9,
+    hazard:   "#FF7A5C",
+    rivet:    "rgba(94,224,200,.16)",
+    vignette: .5,
+    drone:    67,
+  },
+];
+
+const themeFor = (zoneIndex) => THEMES[Math.min(zoneIndex, THEMES.length - 1)];
+
+/* ── levels.js ─────────────────────────────── */
+/* DRIFT — sector data.  GENERATED by tools/compose.py — edit chambers there.
+   Verified by tools/verify.mjs; never hand-edit geometry without re-running it.
+*/
+
+const ZONES=[
+ {at:0 ,name:"ZONE I · HULL",  log:"Outer hull. Pressure gone, power on a trickle. Everything here still works the way it was built to."},
+ {at:6 ,name:"ZONE II · CARGO",log:"Cargo tiers. Mass moves slower than you do, and the buffer only reaches back so far."},
+ {at:12,name:"ZONE III · CORE",log:"Core housing. The plating is spent and the lattice keeps changing its mind about what is solid."},
+ {at:18,name:"ZONE IV · VOID", log:"Outer void. No floor, no ceiling, no second chances. Only what you were carrying when you pushed off."},
+ {at:24,name:"ZONE V · RELAY", log:"The relay still has power. Belts turning, projectors warm, something at the far end still listening. This is the way out."}];
+const zoneOf=i=>{let z=ZONES[0];for(const x of ZONES) if(i>=x.at) z=x; return z;};
+
+const LEVELS=[
+{name:"COLD BOOT",kit:"",par:55,teach:true,hint:"A and D to walk. SPACE to jump. Work your way to the airlock.",rows:[
+"#########################################################################",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#....................E..#",
+"#.......................#.......................#..................######",
+"#...............................................#.......................#",
+"#..................##########...................#.............####......#",
+"#.......................#.......................#.......................#",
+"#.............######....#.......................#.......................#",
+"#.......................#....######.............#........####...........#",
+"#.......#####...........#.......................#.......................#",
+"#...o...................#.............#####.....#.......................#",
+"#..####.................#.......................#...####................#",
+"#.......................#...............................................#",
+"#P......................#..................#o..:........................#",
+"#########################################################################"]},
+
+{name:"VACUUM",kit:"B",par:75,teach:true,hint:"Tap SPACE again in mid-air for the suit burst. Every ledge here is out of reach without it.",rows:[
+"#########################################################################",
+"#.......................#.......................#.......................#",
+"#.......................#...............................................#",
+"#.......................................#####o..:..................E....#",
+"#..................##########...................#################.#######",
+"#............#####......#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#..........######.......#........####...........#",
+"#.......o...............#.......................#.......................#",
+"#.....#####.............#.......................#.......................#",
+"#.......................#.......................#.####..................#",
+"#.......................#...####................#.......................#",
+"#.......................#.......................#.......................#",
+"#P....^^^^^^^^^^^^^^^^^^#^^^^^^^^^^^^^^^^^^^^^^^#^^^^^^^^^^^^^^^^^^^^^^^#",
+"#########################################################################"]},
+
+{name:"CEILING",kit:"F",par:70,teach:true,hint:"Press F to invert your gravity. Floor and ceiling are mined in alternating stretches.",rows:[
+"#########################################################################",
+"#............^^^^^^..o........^^^^^^^....^^^^^^....^^^^^..^^^^^..^^^^^.E#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#P.....^^^^^^......^^^^^.^^^^^^....^^^^^^^^o.....^^^^..^^^^^..^^^^^..^^^#",
+"#########################################################################"]},
+
+{name:"SHUTTERS",kit:"",par:80,teach:true,hint:"Drop-through plating: jump up through it, or hold S to sink back down. Spiked stretches split each deck.",rows:[
+"#########################################################################",
+"#.................................o...................................E.#",
+"#-----------------------#-----------------------#-----------------------#",
+"#.......................................................................#",
+"#..o............^^^^^...........^^^^^^^............^^^^^^....^^^^^^^....#",
+"#-----------------------#-----------------------#-----------------------#",
+"#.......................................................................#",
+"#....^^^^^.............................^^^^^^............^^^^^^^^^......#",
+"#-----------------------#-----------------------#-----------------------#",
+"#.......................................................................#",
+"#..........^^^^^.............^^^^^^................^^^^....^^^^^^^^^^...#",
+"#-----------------------#-----------------------#-----------------------#",
+"#.......................................................................#",
+"#P......................................................................#",
+"#########################################################################"]},
+
+{name:"INVERSION",kit:"F",par:85,teach:true,hint:"Floor and ceiling are both mined. Flip is all you get \u2014 swap sides where the gaps line up.",rows:[
+"#########################################################################",
+"#.o.........^^^^^^...........^^^^^^....^^^^^^.D....^^^^^^^..^^^^^^^^..DE#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#....######...######....#..######....######.....#..#####...#####...######",
+"#.......................................................................#",
+"#.......................................................................#",
+"#.......................................................................#",
+"#.......................................................................#",
+"#.......................................................................#",
+"#P...^^^^^^^....S.^^^^^^#^^^^^....^^^^^^o...^^^^#^^^^^..^^^^^^^..^^^^^^^#",
+"#########################################################################"]},
+
+{name:"STACK",kit:"B",par:110,teach:false,hint:"The decks only open on one side at a time. Cross to the gap, then burst up through it.",rows:[
+"#########################################################################",
+"#.................................................E.....................#",
+"#.....................o.................................................#",
+"#.......................................................................#",
+"#-----------########################------------#-----------:..o#########",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"############------------#-----------########################------------#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#-----------########################------------#-----------#############",
+"#P......................................................................#",
+"#########################################################################"]},
+
+{name:"UNDO",kit:"R",par:70,teach:false,hint:"Hold R to rewind time. It pulls you back \u2014 but a latched switch stays latched.",rows:[
+"#########################################################################",
+"#..................D.......................D.......................D....#",
+"#P.................D.......................D.......................D...E#",
+"#########.#############################.#############.###################",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#..................o....#.......................#.......................#",
+"#.....S.................#...........o..S........#.............S.........#",
+"#########################################################################"]},
+
+{name:"DEADWEIGHT",kit:"R",par:110,teach:false,hint:"Anchored cargo ignores rewind. Park it on the plate, then rewind yourself out.",rows:[
+"#########################################################################",
+"#.................D.......................D.......................D.....#",
+"#P................D.......................D.......................D....E#",
+"#####.#############################.#################.###################",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#..............A..o.....#.......A...............#..............A........#",
+"#.............######....#......######...........#.............##o..:....#",
+"#......B................#..............B........#.....B.................#",
+"#########################################################################"]},
+
+{name:"CONVEYANCE",kit:"B",par:130,teach:false,hint:"Ferries run on fixed sweeps. No rewind here \u2014 read the timing and commit.",rows:[
+"#################################################",
+"#.......................#..................DE####",
+"#.......................#..................######",
+"#..o..S.........................................#",
+"#...#####................####...................#",
+"#.......................#.......................#",
+"#.......................#.......................#",
+"#...............######..#....######.............#",
+"#.......................#.......................#",
+"#.......................#.......................#",
+"#.......................#.......................#",
+"#.......................#.......................#",
+"#.......................#.......................#",
+"#P..o^^^^^^^^^^^^^^^^^^.#.^^^^^^^^^^^^^^^^^^^^^.#",
+"#################################################"],
+ mp:[
+    {c:3,r:11,w:4,axis:"x",dist:11,speed:0.65,phase:0},
+    {c:9,r:5,w:4,axis:"x",dist:10,speed:0.55,phase:0.4},
+    {c:9,r:3,w:4,axis:"x",dist:7,speed:0.75,phase:0.7},
+    {c:26,r:11,w:4,axis:"x",dist:16,speed:0.7,phase:0.2},
+    {c:26,r:7,w:4,axis:"x",dist:14,speed:0.6,phase:0.55},
+    {c:30,r:4,w:4,axis:"x",dist:10,speed:0.8,phase:0.15}]},
+
+{name:"REACTOR CORE",kit:"R",par:130,teach:false,hint:"One way down. The plate holds the door \u2014 but only cargo can hold the plate.",rows:[
+"#########################################################################",
+"#P................D.......................D.......................D....E#",
+"#######.###########################.#######################.#############",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#^^^^^^........^^^^^^^^^#^^^^^^^^^....^^^^^^^^^^#^^^^^^^....^^^^^^^^^^^^#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#..............A..o.....#.....A.................#........A..............#",
+"#..........#########....#....#######............#.......###o..:.........#",
+"#...B...................#..............B........#..................B....#",
+"#########################################################################"]},
+
+{name:"COUNTERWEIGHT",kit:"R",par:175,teach:false,hint:"Two plates, two holds, one of you. The buffer refills as you play \u2014 spend it more than once.",rows:[
+"#########################################################################",
+"#P...............D.......................D.......................D.....E#",
+"#####.#########.#############.#######################.###################",
+"#..........#............#..........#............#.......................#",
+"#..........#............#..........#............#.......................#",
+"#..........#............#..........#............#.......................#",
+"#..........#............#..........#............#.......................#",
+"#..........#............#..........#............#.......................#",
+"#..........#............#..........#............#.......................#",
+"#..........#..A.o.......#..........#............#.......................#",
+"#..........#.#####......#..........#............#.......................#",
+"#..........#............#.......A..#............#..........A............#",
+"#..........#............#......#####............#........#o..:..........#",
+"#..B....A..#....B.......#....B.....#............#...............B.......#",
+"#########################################################################"]},
+
+{name:"BALLAST",kit:"R",par:140,teach:false,hint:"Each deck has one hole in it. Walk the cargo to the hole, drop it, then rewind yourself out.",rows:[
+"#########################################################################",
+"#P.................D.......................D.......................D...E#",
+"#####.################################.##################.###############",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#........A..............#.................A.....#",
+"#..............A.......o#--------------.--------#--------------.--------#",
+"#---------.-------------#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.....B.................#...........o......B....#...........B...........#",
+"#########################################################################"]},
+
+{name:"ALTERNATOR",kit:"",par:100,teach:false,hint:"Amber lattice is solid; violet is not. Touch a coupler to swap which is which.",rows:[
+"#########################################################################",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......=.......%...=...#....%......=.....%.....#...=......%.....=......#",
+"#.......=.......%...=...#....%......=.....%.....#...=......%.....=......#",
+"#.......=.......%...=...#....%......=.....%.....#...=......%.....=......#",
+"#.......=.......%...=...#....%......=.....%.....#...=......%.....=......#",
+"#P..T...=...T...%.oT=......T.%..T..o=..T..%.......T.=..T...%..T..=.....E#",
+"#########################################################################",
+"#########################################################################"]},
+
+{name:"BRITTLE",kit:"R",par:110,teach:false,hint:"Violet plating takes one crossing and never comes back. Rewind is your ride home.",rows:[
+"#########################################################################",
+"#....^^^^^^^^^^^^^^^^...#....^^^^^^^^^^^^^^^^...#...^^^^^^^^^^^^^^^^^...#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#P.........o.........S.............So......................S............#",
+"##D##~~~~~~~~~~~~~~~##########~~~~~~~~~~~~~~~########~~~~~~~~~~~~~~~~#D##",
+"#...#...............#...#....................#..#...................#...#",
+"#...#...............#...#....................#..#...................#...#",
+"#...#...............#...#....................#..#...................#...#",
+"#...#^^^^^^^^^^^^^^^#...#^^^^^^^^^^^^^^^^^^^^#..#^^^^^^^^^^^^^^^^^^^#.E.#",
+"#########################################################################"]},
+
+{name:"POLARITY",kit:"F",par:130,teach:false,hint:"Each lattice wall blocks one lane at a time. The coupler on the floor swaps which lane is open.",rows:[
+"#########################################################################",
+"#.o...%%%.......===..........===.....%%%........o...%%%......===........#",
+"#.....%%%.......===.....#....===.....%%%........#...%%%......===........#",
+"#.....%%%.......===.....#....===.....%%%........#...%%%......===........#",
+"#.....%%%.......===.....#....===.....%%%........#...%%%......===........#",
+"#.....%%%.......===.....#....===.....%%%........#...%%%......===........#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.....===.......%%%.....#....%%%.....===........#...===......%%%........#",
+"#.....===.......%%%.....#....%%%.....===........#...===......%%%........#",
+"#.....===.......%%%.....#....%%%.....===........#...===......%%%........#",
+"#.....===.......%%%.....#....%%%.....===........#...===......%%%........#",
+"#P....===...T...%%%........T.%%%..T..===..........T.===..T...%%%.......E#",
+"#########################################################################"]},
+
+{name:"LATTICE",kit:"R",par:135,teach:false,hint:"The coupler is down there with you, and the lattice remembers. Rewind will not put the gate back.",rows:[
+"#########################################################################",
+"#P.................D.......................D.......................D...E#",
+"####%#############################%####################%#################",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.........===...........#.....%%%.......===.....#.......===......%%%....#",
+"#.........===...........#.....%%%.......===.....#.......===......%%%....#",
+"#.........===...........#.....%%%.......===.....#.......===......%%%....#",
+"#.........===...........#.....%%%.......===.....#.......===......%%%....#",
+"#...T.....===.....S....o#..S..%%%..oT...===..T..#..T....===...S..%%%..T.#",
+"#########################################################################"]},
+
+{name:"HALF-LIFE",kit:"BR",par:200,teach:false,hint:"Three tiers, three one-way crossings. The shaft is the only way up, rewind the only way back.",rows:[
+"#########################################################################",
+"#................#......#......#................#......#................#",
+"#.S..........................................D..#....................DE.#",
+"#####~~~~~~~~~~~~####.#####.####~~~~~~~~~~~~#######.:..o~~~~~~~~~~~~#####",
+"#................#......#......#................#......#................#",
+"#................#......#......#................#......#................#",
+"#.S.........o...........#.....................S.#.....................S.#",
+"#####~~~~~~~~~~~~#...#######...#~~~~~~~~~~~~########...#~~~~~~~~~~~~#####",
+"#................#......#......#................#......#................#",
+"#................#......#......#................#......#................#",
+"#.S.....................#.....................S.......................S.#",
+"#####~~~~~~~~~~~~######.#.######~~~~~~~~~~~~#####.######~~~~~~~~~~~~#####",
+"#................#......#......#................#......#................#",
+"#^^^^^^^^^^^^^^^^#.....P#......#^^^^^^^^^^^^^^^^#......#^^^^^^^^^^^^^^^^#",
+"#########################################################################"]},
+
+{name:"ATTRITION",kit:"R",par:170,teach:false,hint:"No coupler on the lower deck. Set the lattice before you spend the plating.",rows:[
+"#########################################################################",
+"#P.................D.......................D.......................D...E#",
+"#####.###############################.###############.###################",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......T...............#..........T............#.....T.................#",
+"#############~~~~~~~.########~~~~~~~.################~~~~~~~~~~.#########",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.........===...........#.....%%%...............#..........===..........#",
+"#.........===...........#.....%%%...............#..........===..........#",
+"#.........===...........#.....%%%...............#..........===..........#",
+"#.........===...........#.....%%%...............#..........===..........#",
+"#....S....===.......o...#..S..%%%...o...........#.....S....===..........#",
+"#########################################################################"]},
+
+{name:"NULL FIELD",kit:"",par:110,teach:false,hint:"Gravity dies inside the blue. W A S D thrusts \u2014 momentum is all you have.",rows:[
+"#########################################################################",
+"#ZZZZZZZZZZZZZZZZZZZ.........ZZZZZZZZZZZZZZZZZZZ#....ZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZZZZZZZZZZZZZZZZ#########ZZZZZZZZZZZZZZZZZZZ#####ZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZZZZ^^^^ZZZZZZZZZZZZ#ZZZZZZZZZ^^^^^^ZZZZZZZZ#ZZZZ^^^^^ZZZZZ^^^^^^ZZZ#",
+"#ZZZZZZZZZZZZZZZZZZZoZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZ^^^^^^^^^^^^ZZZZZZZ#ZZZ^^^^^ZZZZZZZ^^^^^ZZZ#ZZ^^^^^ZZZZZZZZZ^^^^^ZZ#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZ...ZZZZZZZ^^^^^^^ZZZZZZZZZ#",
+"#########.###################################.###ZZZZZZZZZZZZZZZZZZZZE..#",
+"#.......................#.......................#################o..:.###",
+"#.......................#.......................#.......................#",
+"#.......###.............#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#P......................#.......................#.......................#",
+"#########################################################################"]},
+
+{name:"NULL LOCK",kit:"",par:140,teach:false,hint:"No rewind, no burst. Read the whole drift before you commit to any of it.",rows:[
+"#########################################################################",
+"#ZZZZZZZZZZZZZZZZZZZD.......ZZZZZZZZZZZZZZZZ.D..#...ZZZZZZZZZZZZZZZZ.DE.#",
+"#ZZZZZZZZZZZZZZZZZZZ#########ZZZZZZZZZZZZZZZ#####o..:ZZZZZZZZZZZZZZZ#####",
+"#ZZZZ^^^^^ZZZZZ^^^^^ZZZZ#ZZZZZZZ^^^^^^^ZZZZZZZZZ#ZZZZ^^^^^^ZZZ^^^^^^ZZZZ#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZ^^^^^^^^ZZZ^^^^^^^^Z#ZZZ^^^^^ZZZZZZZZ^^^^^ZZ#ZZ^^^^ZZZZZZZZZZZ^^^^ZZ#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZZZZZZZZSZZZZZZZZZZZ#ZZZZZZZZZZZZZZZSZZZZZZZ#ZZZZZZZZZZSZZZZZZZZZZZZ#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#^^^^^^ZZZZZ^^^^^^ZZZZZZ#ZZZZZ^^^^^^^ZZZZZZ^^^^Z#ZZZZ^^^^^^^^ZZZ^^^^^^ZZ#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZoZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#P......................#...............................................#",
+"#########################################################################"]},
+
+{name:"UNDERTOW",kit:"",par:150,teach:false,hint:"Pure drift, and nothing to undo it with. Every push of thrust is permanent.",rows:[
+"#########################################################################",
+"#.......................#.....................D.#.....................DE#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ.ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZ^^^^^^ZZZZ^^^^^^ZZZ#ZZZZZZZ^^^^^^^^ZZZZZZZZ#ZZZ^^^^^^^ZZZZ^^^^^^ZZZ#",
+"#ZZZZZZZZZZZZZZZZZZZoZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZZZZZ^^^^^^^^ZZZZZZZ#ZZZ^^^^^ZZZZZZZZZZ^^^^Z#ZZ^^^^ZZZZZZZZZZZ^^^^^Z#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZZZZZZZZSZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZSZZZZZZ#ZZZZZZZZZZZZZZSZZZZZZZZ#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZ^^^^^^^^^ZZZZZZZZZZZ#ZZZZZZZZZ^^^^^^^^^^ZZZZ#ZZZZZ^^^^^^^^^^ZZZZZZZZ#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#.......................#.......................#.......................#",
+"#P......................#............o..................................#",
+"#########################################################################"]},
+
+{name:"SUSPENSION",kit:"",par:160,teach:false,hint:"The lattice holds even where gravity doesn't. Find the coupler before you cross.",rows:[
+"#########################################################################",
+"#ZZZZZZZZZZZZZZZZZZZZ.......ZZZZZZZZZZZZZZZZZZ..#...ZZZZZZZZZZZZZZZZZZE.#",
+"#ZZZZZZZZZZZZZZZZZZZZ#######ZZZZZZZZZZZZZZZZZZ:..o##ZZZZZZZZZZZZZZZZZZ###",
+"#ZZZZZZZZZ===ZZZZZZZZZZZ#ZZZZZZ%%%ZZZZZZ%%%ZZZZZ#ZZZZ===ZZZZZZZZ===ZZZZZ#",
+"#ZZZZZZZZZ===ZZZZZZZZZZZ#ZZZZZZ%%%ZZZZZZ%%%ZZZZZ#ZZZZ===ZZZZZZZZ===ZZZZZ#",
+"#ZZZTZZZZZ===ZZZZZZZZZZZ#ZZZZZZ%%%ZZZTZZ%%%ZZZZZ#ZZZZ===ZZZTZZZZ===ZZZZZ#",
+"#ZZZZZZZZZ===ZZZZZZZZZZZ#ZZZZZZ%%%ZZZZZZ%%%ZZZZZ#ZZZZ===ZZZZZZZZ===ZZZZZ#",
+"#ZZZZZZZZZ===ZZZZZZZZZZZ#ZZZZZZ%%%ZZZZZZ%%%ZZZZZ#ZZZZ===ZZZZZZZZ===ZZZZZ#",
+"#ZZZZZZZZZ===ZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZ^^^^^^^^^^^^^^^ZZZZ#ZZZ^^^^^^^ZZZZ^^^^^^ZZZ#ZZ^^^^^^ZZZZZZ^^^^^^ZZZ#",
+"#ZZZZZZZZZZZZZZZZZZZZZoZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"###.#####################ZZZZZZZZZZZZZZZZZZZZZZZ.ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#P......................#################################################",
+"#########################################################################"]},
+
+{name:"CASCADE",kit:"FR",par:190,teach:false,hint:"The deck above is mined and the plating below is spent. Invert to cross, rewind to leave.",rows:[
+"#########################################################################",
+"#P.................D....#..................D.......................D...E#",
+"####.##################################.#####################.:..o#######",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......^^^^^^^^^^^...S.#..S..^^^^^^^^^^^^^.....#.....^^^^^^^^^^^^^..S..#",
+"#~.~~~~~~~~~~~~~~~~~~~~~#~~~~~~~~~~~~~~~~~~~~~.~#~~~~~~~~~~~~~~~~~~~~~~~#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZZZZZZZoZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#ZZZZZZZZZZZZZZZZZZZZZZZ#",
+"#ZZZZZ^^^^^^^^^^^^^ZZZZZ#ZZZ^^^^^^^^^^^^^^^ZZZZZ#ZZZZZ^^^^^^^^^^^^ZZZZZZ#",
+"#...............................................#.......................#",
+"#########################################################################"]},
+
+{name:"EVENT HORIZON",kit:"BFR",par:240,teach:false,hint:"Everything at once. Mind the breach \u2014 and the only way past that field is upside down.",rows:[
+"#########################################################################",
+"#...^^^^^....................^^^^^...................^^^^^^^^...........#",
+"#P............................................DE........................#",
+"####.....####ZZZZZZZZZZZ#####.....###################........:..o########",
+"#...........#ZZZZZZZZZZZ#........################........################",
+"#...........#ZZ^^^^^ZZZZ#........################........################",
+"#..o........#ZZZZZZZZZZZ#........################........################",
+"#...........#ZZZZZSZZZZZ#........################........################",
+"#...........#ZZZ^^^^^ZZZ#........################........################",
+"#...........#ZZZZZZZZZZZ#........################........################",
+"#...........#############........################........################",
+"#.......A...#############........################........################",
+"#.....#####.#############........################........################",
+"#...B.......#############^^^^^^^^################^^^^^^^^################",
+"#########################################################################"]},
+
+{name:"SIGNAL",kit:"",par:90,teach:true,hint:"Live plating carries whatever stands on it. Ride it and see where it goes.",rows:[
+"#########################################################################",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#.......................#.......................#.......................#",
+"#P..................................o...............................E...#",
+"#####>>>>>>>>>>>>>>>########<<<<<<<<####>>>>>>#######>>>>>>>>>>>>>>>#####",
+"#########################################################################"]},
+
+{name:"FREIGHT",kit:"",par:120,teach:false,hint:"The belt moves mass where you cannot push it. Load it and let it run.",rows:[
+"#########################################################################",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#P.A................B.......B...............oA.....A............B..D..E.#",
+"#####>>>>>>>>>>>>>>>########<<<<<<<<<<<<<<<<#########>>>>>>>>>>>>>>######",
+"#########################################################################"]},
+
+{name:"UNDERSTUDY",kit:"",par:140,teach:false,hint:"The projector replays the path you just walked. Your own ghost can hold a plate.",rows:[
+"#########################################################################",
+"#.......................#.......................#...............#.......#",
+"#.......................#.......................#...............#.......#",
+"#.......................#.......................#...............#.......#",
+"#.......................#.......................#...............#.......#",
+"#.......................#.......................#...............#.......#",
+"#.......................#.......................#...............#.......#",
+"#.......................#.......................#...............#.......#",
+"#.......................#.......................#...............#.......#",
+"#.......................#.......................#...............#.......#",
+"#.......................#.......................#...............#.......#",
+"#.......................#.......................#...............#.......#",
+"#P....B.......X..............X.....o.B.............B.....X....B.D.....E.#",
+"#########################################################################",
+"#########################################################################"]},
+
+{name:"RELAY",kit:"",par:165,teach:false,hint:"Two holds and one of you \u2014 unless you leave someone behind.",rows:[
+"#########################################################################",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#P...B......X......B.......Ao......X.........B.....B....X.....B....D..E.#",
+"#############################>>>>>>>>>>>>>>>#############################",
+"#########################################################################"]},
+
+{name:"CROSSTALK",kit:"",par:180,teach:false,hint:"Belts run both ways and the lattice keeps changing which floor is real.",rows:[
+"#########################################################################",
+"#P......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.....===.......%%%.....#.....%%%.......===.....#..................#....#",
+"#.....===.......%%%.....#.....%%%.......===.....#..................#....#",
+"#.....===.......%%%.....#.....%%%.......===.....#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#..T.........B......X......o.X.......T.......B.....B...T....X......D..E.#",
+"#####>>>>>>>>>>>>>>>########<<<<<<<<<<<<<<<<#########>>>>>>>>>>>>>>######",
+"#########################################################################"]},
+
+{name:"LAST TRANSMISSION",kit:"R",par:240,teach:false,hint:"Everything the station has left. Send yourself on ahead.",rows:[
+"#########################################################################",
+"#P...^^^^^......................................#..................#....#",
+"#.......................#.......................#..................#....#",
+"#####.....###############.....===.......%%%.....#..................#....#",
+"#........################.....===.......%%%.....#..................#....#",
+"#........################.....===.......%%%.....#....^^^^^^^^^^^...#....#",
+"#........################.......................#..................#....#",
+"#........################.......................#..................#....#",
+"#........################.......................#..................#....#",
+"#........############o..:.......................#..................#....#",
+"#........################.......................#..................#....#",
+"#........################.......................#..................#....#",
+"#....X......B..............T....B.......X...T......B.....X....A....D..E.#",
+"#####>>>>>>>>>>>>>>>########<<<<<<<<<<<<<<<<#########>>>>>>>>>>>>>>######",
+"#########################################################################"]},
+
+];
+
+/* ── save.js ─────────────────────────────── */
+/* Persistent progress.
+ *
+ * DRIFT runs in three places and each offers a different way to persist:
+ *
+ *   1. a host-provided `storage` object  — the artifact viewer supplies this
+ *   2. the Electron shell                — same API, backed by a real file on disk
+ *   3. a plain browser (served locally, or a downloaded standalone file)
+ *
+ * The first two look identical here, which is why the native preload shims the
+ * same shape. The third had nothing — so double-clicking the standalone file,
+ * which is the most common way to play it, silently lost progress every
+ * session. It now falls back to the browser's own storage.
+ *
+ * Order matters: the host object is preferred whenever it exists, so the
+ * fallback never runs inside an environment that provides its own storage.
+ * Everything is wrapped; saving is best-effort and must never block play.
+ */
+const KEY = "drift:save:v4";
+
+const save = { cleared: [], cores: [], best: {}, vol: 1, amb: .35, shake: 1, assist: 0, last: 0 };
+
+/** Which backend we ended up with — surfaced in Settings so it's never a mystery. */
+let backend = "memory";
+
+function localOK() {
+  try {
+    const t = "__drift_probe__";
+    globalThis.localStorage.setItem(t, "1");
+    globalThis.localStorage.removeItem(t);
+    return true;
+  } catch (e) {
+    // Blocked by a file:// origin policy, private mode, or a disabled setting.
+    return false;
+  }
+}
+
+async function saveNow() {
+  const blob = JSON.stringify(save);
+  try {
+    if (globalThis.storage) { await globalThis.storage.set(KEY, blob); backend = "host"; return true; }
+  } catch (e) { /* fall through to the browser */ }
+  try {
+    if (localOK()) { globalThis.localStorage.setItem(KEY, blob); backend = "browser"; return true; }
+  } catch (e) { /* nothing left to try */ }
+  backend = "memory";
+  return false;
+}
+
+/* Older saves predate the ambience control and would otherwise inherit
+   `undefined`, which reads as full volume. Fill in the new default instead. */
+function migrate() {
+  if (typeof save.amb !== "number") save.amb = .35;
+}
+
+async function loadSave() {
+  try {
+    if (globalThis.storage) {
+      const r = await globalThis.storage.get(KEY);
+      if (r && r.value) Object.assign(save, JSON.parse(r.value));
+      migrate(); backend = "host";
+      return true;
+    }
+  } catch (e) { /* fall through */ }
+  try {
+    if (localOK()) {
+      const raw = globalThis.localStorage.getItem(KEY);
+      if (raw) Object.assign(save, JSON.parse(raw));
+      migrate(); backend = "browser";
+      return true;
+    }
+  } catch (e) { /* fall through */ }
+  backend = "memory";
+  return false;
+}
+
+function wipe() {
+  save.cleared = []; save.cores = []; save.best = {}; save.last = 0;
+  save.tele = { deaths: [], clears: [], stalls: [] };
+  return saveNow();
+}
+
+const clearedSet = () => new Set(save.cleared);
+const coreSet = () => new Set(save.cores);
+
+const backendLabel = () => ({
+  host: "saving to this app",
+  browser: "saving in this browser",
+  memory: "not saving — progress ends with this session",
+}[backend]);
+
+/* ── audio.js ─────────────────────────────── */
+/* Procedural audio — no asset files, no load time, no licensing. */
+let paused=true;
+function setPaused(p){ paused=p; }
+let actx=null, drone=null, droneGain=null, droneFilt=null;
+function AC(){
+  if(!actx){ try{ actx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ return null; } }
+  if(actx.state==="suspended") actx.resume();
+  return actx;
+}
+function sfx(f0,f1,dur,type,vol){
+  const a=AC(); if(!a||save.vol<=0) return;
+  try{
+    const o=a.createOscillator(), g=a.createGain(), t=a.currentTime;
+    o.type=type||"square"; o.frequency.setValueAtTime(f0,t);
+    o.frequency.exponentialRampToValueAtTime(Math.max(20,f1),t+dur);
+    g.gain.setValueAtTime(0,t);
+    g.gain.linearRampToValueAtTime((vol||.06)*save.vol,t+.008);
+    g.gain.exponentialRampToValueAtTime(.0001,t+dur);
+    o.connect(g);g.connect(a.destination);o.start(t);o.stop(t+dur+.02);
+  }catch(e){}
+}
+const S={
+  jump:()=>sfx(400,660,.10,"square",.05), burst:()=>sfx(280,880,.16,"sawtooth",.05),
+  land:()=>sfx(170,90,.07,"sine",.05),    flip:()=>sfx(520,190,.16,"triangle",.05),
+  latch:()=>sfx(620,1180,.16,"square",.06), plate:()=>sfx(300,520,.12,"triangle",.06),
+  door:()=>sfx(150,300,.34,"sine",.07),   crack:()=>sfx(240,120,.14,"sawtooth",.05),
+  die:()=>sfx(330,70,.30,"sawtooth",.07), tickr:()=>sfx(880,660,.03,"sine",.02),
+  deny:()=>sfx(150,90,.10,"square",.045), reset:()=>sfx(240,420,.14,"triangle",.05),
+  core:()=>{sfx(700,1050,.10,"sine",.06);setTimeout(()=>sfx(1050,1400,.16,"sine",.05),90);},
+  toggle:()=>sfx(440,300,.12,"square",.055),
+  exit:()=>{sfx(520,780,.14,"sine",.07);setTimeout(()=>sfx(780,1180,.22,"sine",.06),110);}
+};
+/* Zone ambience.
+ *
+ * This was a bare sine at 41–67Hz running at a fixed level under everything,
+ * which is exactly the recipe for something that wears on you: low frequencies
+ * are felt as much as heard, so they don't register as "loud" but they do
+ * accumulate over a session.
+ *
+ * Three changes. It's much quieter by default. It runs through a lowpass so
+ * it's a floor rather than a tone. And it has its OWN level, independent of the
+ * sound effects, so it can be turned off without losing the audio that actually
+ * tells you things.
+ */
+const DRONE_CEILING = .0055;      // was .016 — roughly a third
+
+function setDrone(hz){
+  const a=AC(); if(!a) return;
+  try{
+    if(!drone){
+      drone=a.createOscillator();
+      droneFilt=a.createBiquadFilter();
+      droneGain=a.createGain();
+      drone.type="sine";
+      droneFilt.type="lowpass"; droneFilt.frequency.value=180; droneFilt.Q.value=.4;
+      droneGain.gain.value=0;
+      drone.connect(droneFilt); droneFilt.connect(droneGain);
+      droneGain.connect(a.destination);
+      drone.start();
+    }
+    // an octave up from the old pitch: still low, but out of the rumble band
+    drone.frequency.setTargetAtTime(hz*2,a.currentTime,.6);
+    const amb = save.amb===undefined ? .5 : save.amb;
+    const target = (paused || amb<=0) ? 0 : DRONE_CEILING*amb*save.vol;
+    droneGain.gain.setTargetAtTime(target,a.currentTime,1.2);   // slower, so it never swells
+  }catch(e){}
+}
+
+/* ── game.js ─────────────────────────────── */
+/* DRIFT — engine. Physics, rendering, UI and input.
+   Sector data lives in levels.js; tuning in config.js. Nothing here hardcodes
+   a number the verifier also depends on — those all come from config. */
+
+
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function boot(){
+  /* ══════════════ STATE ══════════════ */
+  const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
+  let grid=[], lvl=0, deaths=0, runDeaths=0, runStart=0, lvlStart=0, lvlMs=0;
+  let player=null, exitPt=null, switches=[], plates=[], crates=[], plats=[], cores=[], toggles=[];
+  let fuses=new Map(), phase=0, tCool=0;
+  let history=[], rewinding=false, dead=0, won=0, paused=true, shake=0, tick=0, parts=[];
+  let kit={burst:1,flip:1,rewind:1}, denyT=0, denyKey="", idleT=0, gotCore=false, runMode=false;
+  let coresGot=0, coresTotal=0;
+  let projectors=[], phantom=null;      // phantom replays YOUR last 12s from the rewind buffer
+  let TH=themeFor(0);            // active zone theme — presentation only
+
+  /* ── playtest telemetry ──────────────────────────────────────────
+     The verifier proves a sector is solvable. It cannot tell you a stage earns
+     its length, or that people quit at 17. This records the handful of things
+     that answer those questions: where you die, how long each sector takes,
+     where you stall, and which cores nobody ever finds. Local only. */
+  const tele = save.tele || (save.tele = {deaths:[], clears:[], stalls:[]});
+  function record(list, row){
+    list.push(row);
+    if(list.length > 4000) list.splice(0, list.length - 4000);
+  }
+  let COLS=VCOLS, ROWS=VROWS, LW=W, LH=H;              // level grid size in tiles / pixels
+  let cam={x:0,y:0,tx:0,ty:0};                          // view origin, pixels
+  const BUFFER=()=> save.assist? BASE_BUFFER*ASSIST_BUFFER : BASE_BUFFER;
+
+  const keys=Object.create(null);
+  const K={left:["KeyA","ArrowLeft","tL"],right:["KeyD","ArrowRight","tR"],
+           up:["KeyW","ArrowUp"],down:["KeyS","ArrowDown","tD"]};
+  const held=s=>s.some(k=>keys[k]);
+  let stars=[];
+  function seedStars(n,count){
+    let s=n*9301+49297; const rnd=()=>((s=(s*9301+49297)%233280)/233280);
+    stars=[]; const N=count||80;
+    for(let i=0;i<N;i++) stars.push({x:rnd()*W,y:rnd()*H,r:rnd()*1.4+.25,a:rnd()*.5+.12,sp:rnd()*.2+.03});
+  }
+
+  /* ══════════════ LOAD ══════════════ */
+  function loadLevel(i){
+    lvl=i; const L=LEVELS[i], k=L.kit||"";
+    kit={burst:k.includes("B"),flip:k.includes("F"),rewind:k.includes("R")};
+    grid=L.rows.map(r=>r.split(""));
+    ROWS=grid.length; COLS=grid[0].length; LW=COLS*TILE; LH=ROWS*TILE;
+    switches=[];plates=[];crates=[];plats=[];cores=[];toggles=[];projectors=[];phantom=null;exitPt=null;
+    fuses=new Map();parts=[];phase=0;tCool=0;
+    player={x:32,y:32,w:20,h:26,vx:0,vy:0,gd:1,onGround:false,wasGround:false,airJump:true,
+            coyote:0,jbuf:0,face:1,zg:false,thrust:0};
+    for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+      const ch=grid[r][c], px=c*TILE, py=r*TILE;
+      if(ch==="P"){player.x=px+(TILE-player.w)/2;player.y=py+TILE-player.h;grid[r][c]=".";}
+      else if(ch==="E"){exitPt={x:px,y:py};grid[r][c]=".";}
+      else if(ch==="S"){switches.push({x:px,y:py,latched:false,pop:0});grid[r][c]=".";}
+      else if(ch==="B"){plates.push({x:px,y:py,on:false,was:false});grid[r][c]=".";}
+      else if(ch==="T"){toggles.push({x:px,y:py,pop:0});grid[r][c]=".";}
+      else if(ch==="X"){projectors.push({x:px,y:py,used:false,pop:0});grid[r][c]=".";}
+      else if(ch==="o"){cores.push({x:px+8,y:py+8,w:16,h:16,got:false});grid[r][c]=".";}
+      else if(ch==="C"||ch==="A"){crates.push({x:px+3,y:py+3,w:26,h:26,vy:0,anchored:ch==="A"});grid[r][c]=".";}
+    }
+    (L.mp||[]).forEach(m=>{
+      const dist=m.dist*TILE;
+      plats.push({x0:m.c*TILE,y0:m.r*TILE,x:m.c*TILE,y:m.r*TILE,w:m.w*TILE,h:TILE,
+                  axis:m.axis,dist,speed:m.speed,p:(m.phase||0)*dist,dir:1});
+    });
+    plats.forEach(p=>{ if(p.axis==="x") p.x=p.x0+p.p; else p.y=p.y0+p.p; });
+    history=[];rewinding=false;dead=0;won=0;deaths=0;shake=0;idleT=0;denyT=0;
+    cam.x=cam.tx=clampCamX(player.x-W/2); cam.y=cam.ty=clampCamY(player.y-H/2);
+    gotCore=false; coresGot=0; coresTotal=cores.length; lvlStart=performance.now(); lvlMs=0;
+    seedStars(i+3, TH.starCount);
+    const z=zoneOf(i);
+    document.getElementById("lvlNum").textContent=String(i+1).padStart(2,"0");
+    document.getElementById("lvlName").textContent=L.name;
+    document.getElementById("zone").textContent=z.name;
+    /* Zone I still explains itself. Everywhere after, the level has to speak
+       through its own layout — a permanent hint strip reads as a manual. */
+    const hintEl=document.getElementById("hint");
+    hintEl.textContent = L.teach ? L.hint : "";
+    hintEl.classList.toggle("off", !L.teach);
+    document.getElementById("hudBot").classList.toggle("quiet", !L.teach);
+    document.getElementById("deaths").textContent=0;
+    TH=themeFor(ZONES.indexOf(z));
+    setDrone(TH.drone);
+  }
+
+  /* ══════════════ CAMERA ══════════════
+     Levels are wider and taller than the view now. The camera holds still while
+     the player moves inside a deadzone, then eases after them — a hard follow on
+     a precision platformer makes the whole screen twitch on every step. */
+  const clampCamX=x=> LW<=W ? (LW-W)/2 : Math.max(0,Math.min(LW-W,x));
+  const clampCamY=y=> LH<=H ? (LH-H)/2 : Math.max(0,Math.min(LH-H,y));
+  function updateCam(snap){
+    const px=player.x+player.w/2, py=player.y+player.h/2;
+    const look=player.face*CAM_LOOKAHEAD*(Math.abs(player.vx)>1?1:0);
+    let cx=cam.tx+W/2, cy=cam.ty+H/2;
+    if(px-look < cx-CAM_DEADZONE_X) cx=px-look+CAM_DEADZONE_X;
+    if(px-look > cx+CAM_DEADZONE_X) cx=px-look-CAM_DEADZONE_X;
+    if(py < cy-CAM_DEADZONE_Y) cy=py+CAM_DEADZONE_Y;
+    if(py > cy+CAM_DEADZONE_Y) cy=py-CAM_DEADZONE_Y;
+    cam.tx=clampCamX(cx-W/2); cam.ty=clampCamY(cy-H/2);
+    if(snap){ cam.x=cam.tx; cam.y=cam.ty; }
+    else { cam.x+=(cam.tx-cam.x)*CAM_LERP; cam.y+=(cam.ty-cam.y)*CAM_LERP; }
+  }
+
+/* ══════════════ WORLD ══════════════ */
+  const doorsOpen=()=> (switches.length+plates.length>0)
+    && switches.every(s=>s.latched) && plates.every(p=>p.on);
+  function tileAt(c,r){ return (c<0||c>=COLS||r<0||r>=ROWS) ? "#" : grid[r][c]; }
+  const BELT=.9;                       // tiles/sec the plating carries you
+  function beltAt(c,r){ const t=tileAt(c,r); return t===">"?1:t==="<"?-1:0; }
+  function tileSolid(c,r){
+    const t=tileAt(c,r);
+    if(t===">"||t==="<") return true;
+    return t==="#" || t==="~" || (t==="D"&&!doorsOpen())
+        || (t==="="&&phase===0) || (t==="%"&&phase===1);
+  }
+  function hitTiles(x,y,w,h){
+    const c0=Math.floor(x/TILE),c1=Math.floor((x+w-1)/TILE);
+    const r0=Math.floor(y/TILE),r1=Math.floor((y+h-1)/TILE);
+    for(let r=r0;r<=r1;r++)for(let c=c0;c<=c1;c++) if(tileSolid(c,r)) return true;
+    return false;
+  }
+  /* drop-through plating: only solid to something moving in its own gravity sense */
+  function hitTilesY(x,y,w,h,dir,ignoreDrop){
+    if(hitTiles(x,y,w,h)) return true;
+    if(ignoreDrop) return false;
+    const c0=Math.floor(x/TILE),c1=Math.floor((x+w-1)/TILE);
+    const r0=Math.floor(y/TILE),r1=Math.floor((y+h-1)/TILE);
+    for(let r=r0;r<=r1;r++)for(let c=c0;c<=c1;c++){
+      if(tileAt(c,r)!=="-") continue;
+      const top=r*TILE, bot=top+TILE;
+      if(dir>0 && y+h-1 >= top && y+h-1 < top+18 ) return true;   // landing from above
+      if(dir<0 && y <= bot-1 && y > bot-19) return true;          // landing from below (inverted)
+    }
+    return false;
+  }
+  function hasChar(x,y,w,h,ch){
+    const c0=Math.floor(x/TILE),c1=Math.floor((x+w-1)/TILE);
+    const r0=Math.floor(y/TILE),r1=Math.floor((y+h-1)/TILE);
+    for(let r=r0;r<=r1;r++)for(let c=c0;c<=c1;c++) if(tileAt(c,r)===ch) return true;
+    return false;
+  }
+  const ovl=(a,b)=> a.x<b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y;
+  function platHit(x,y,w,h){ const b={x,y,w,h}; for(const p of plats) if(ovl(b,p)) return p; return null; }
+  function crateHit(x,y,w,h,skip){ const b={x,y,w,h}; for(const c of crates){ if(c===skip) continue; if(ovl(b,c)) return c; } return null; }
+  const solidX=(x,y,w,h)=> hitTiles(x,y,w,h) || !!platHit(x,y,w,h);
+
+  /* ══════════════ FERRIES ══════════════ */
+  function updatePlats(){
+    for(const p of plats){
+      const ox=p.x, oy=p.y;
+      p.p+=p.speed*p.dir;
+      if(p.p>=p.dist){p.p=p.dist;p.dir=-1;} else if(p.p<=0){p.p=0;p.dir=1;}
+      if(p.axis==="x") p.x=p.x0+p.p; else p.y=p.y0+p.p;
+      const dx=p.x-ox, dy=p.y-oy;
+      if(!dx&&!dy) continue;
+      if(riding(player,ox,oy,p)) shove(player,dx,dy);
+      for(const c of crates) if(riding(c,ox,oy,p)) shove(c,dx,dy);
+      unstick(player,p,dx,dy);
+      for(const c of crates) unstick(c,p,dx,dy);
+    }
+  }
+  function riding(e,ox,oy,p){
+    const gd=(e===player)?player.gd:1;
+    const foot={x:e.x+2, y: gd>0 ? e.y+e.h-1 : e.y-3, w:e.w-4, h:4};
+    return ovl(foot,{x:ox,y:oy,w:p.w,h:p.h});
+  }
+  function shove(e,dx,dy){
+    const nx=e.x+dx, ny=e.y+dy;
+    if(!hitTiles(nx,e.y,e.w,e.h) && !crateHit(nx,e.y,e.w,e.h,e)) e.x=nx;
+    if(!hitTiles(e.x,ny,e.w,e.h) && !crateHit(e.x,ny,e.w,e.h,e)) e.y=ny;
+  }
+  function unstick(e,p,dx,dy){
+    if(!ovl(e,p)) return;
+    if(dx>0) e.x=p.x+p.w; else if(dx<0) e.x=p.x-e.w;
+    if(dy>0) e.y=p.y+p.h; else if(dy<0) e.y=p.y-e.h;
+  }
+
+  /* ══════════════ CARGO ══════════════ */
+  function pushCrate(cr,dx){
+    const n=Math.max(1,Math.ceil(Math.abs(dx))), s=dx/n;
+    for(let i=0;i<n;i++){
+      const nx=cr.x+s;
+      if(solidX(nx,cr.y,cr.w,cr.h)||crateHit(nx,cr.y,cr.w,cr.h,cr)) return false;
+      cr.x=nx;
+    }
+    return true;
+  }
+  function crateFall(){
+    for(const cr of crates){
+      cr.vy=Math.min(cr.vy+GRAV,MAXFALL);
+      const n=Math.max(1,Math.ceil(Math.abs(cr.vy))), s=cr.vy/n;
+      for(let i=0;i<n;i++){
+        const ny=cr.y+s;
+        if(hitTilesY(cr.x,ny,cr.w,cr.h,1,false)||platHit(cr.x,ny,cr.w,cr.h)||crateHit(cr.x,ny,cr.w,cr.h,cr)){cr.vy=0;break;}
+        cr.y=ny;
+      }
+    }
+  }
+
+  /* ══════════════ PLAYER ══════════════ */
+  function moveX(dx){
+    const n=Math.max(1,Math.ceil(Math.abs(dx))), s=dx/n;
+    for(let i=0;i<n;i++){
+      const nx=player.x+s;
+      if(solidX(nx,player.y,player.w,player.h)){player.vx=0;return;}
+      const cr=crateHit(nx,player.y,player.w,player.h);
+      if(cr && !pushCrate(cr,s)){player.vx=0;return;}
+      player.x=nx;
+    }
+  }
+  function moveY(dy){
+    const n=Math.max(1,Math.ceil(Math.abs(dy))), s=dy/n;
+    const dropping = held(K.down) && !player.zg;
+    for(let i=0;i<n;i++){
+      const ny=player.y+s;
+      const hit = hitTilesY(player.x,ny,player.w,player.h,Math.sign(s),dropping)
+               || platHit(player.x,ny,player.w,player.h)
+               || crateHit(player.x,ny,player.w,player.h);
+      if(hit){
+        if(Math.sign(s)===player.gd) player.onGround=true;
+        player.vy=0;return;
+      }
+      player.y=ny;
+    }
+  }
+
+  /* ══════════════ PLATING / PHASE / CORES ══════════════ */
+  function checkFuses(){
+    if(player.onGround){
+      const fy = player.gd>0 ? player.y+player.h+1 : player.y-1;
+      const c0=Math.floor((player.x+2)/TILE), c1=Math.floor((player.x+player.w-3)/TILE);
+      const r=Math.floor(fy/TILE);
+      for(let c=c0;c<=c1;c++) if(tileAt(c,r)==="~"){
+        const k=r*COLS+c;
+        if(!fuses.has(k)){ fuses.set(k,FUSE); S.crack(); }
+      }
+    }
+    for(const [k,v] of [...fuses]){
+      if(v<=0){
+        const r=Math.floor(k/COLS), c=k%COLS;
+        grid[r][c]="."; fuses.delete(k); shake=Math.max(shake,3); idleT=0; S.crack();
+        for(let i=0;i<10;i++) puff(c*TILE+16,r*TILE+16,"#A78BFA",2.6);
+      } else fuses.set(k,v-1);
+    }
+  }
+  /* Touch a projector and it plays back the path you just walked. The phantom
+     is literally your rewind history run forwards, so it holds plates exactly
+     where you stood — the answer to "two plates, one of you". */
+  function checkProjectors(){
+    for(const p of projectors){
+      if(p.pop>0) p.pop-=.03;
+      if(p.used) continue;
+      if(ovl(player,{x:p.x+4,y:p.y+4,w:24,h:24})){
+        const take=Math.min(history.length, 720);          // up to 12s of your path
+        if(take<30) continue;                              // nothing worth replaying yet
+        phantom={frames:history.slice(-take).map(s=>({x:s.x,y:s.y})), i:0, loop:true};
+        p.used=true; p.pop=1; shake=5; idleT=0; S.latch();
+        for(let i=0;i<16;i++) puff(p.x+16,p.y+16,"#5EE0C8",2.8);
+      }
+    }
+  }
+  function stepPhantom(){
+    if(!phantom) return;
+    phantom.i++;
+    if(phantom.i>=phantom.frames.length) phantom.i = phantom.loop ? 0 : phantom.frames.length-1;
+  }
+  const phantomBox=()=>{
+    if(!phantom) return null;
+    const f=phantom.frames[phantom.i];
+    return {x:f.x, y:f.y, w:player.w, h:player.h};
+  };
+  function checkToggles(){
+    if(tCool>0) tCool--;
+    for(const t of toggles){
+      if(t.pop>0) t.pop-=.04;
+      if(tCool>0) continue;
+      if(ovl(player,{x:t.x+4,y:t.y+4,w:24,h:24})){
+        phase=1-phase; tCool=26; t.pop=1; shake=4; idleT=0; S.toggle();
+        for(let i=0;i<14;i++) puff(t.x+16,t.y+16,phase?"#A78BFA":"#FFC46B",2.6);
+        // never let a phase flip fuse the player inside solid lattice
+        if(hitTiles(player.x,player.y,player.w,player.h)) nudgeOut();
+      }
+    }
+  }
+  function nudgeOut(){
+    for(let d=1;d<=TILE*2;d++)
+      for(const [dx,dy] of [[0,-d],[0,d],[-d,0],[d,0]])
+        if(!hitTiles(player.x+dx,player.y+dy,player.w,player.h)){ player.x+=dx; player.y+=dy; return; }
+  }
+  function checkCores(){
+    for(const c of cores){
+      if(c.got) continue;
+      if(ovl(player,c)){
+        c.got=true; coresGot++; idleT=0;
+        gotCore = coresGot===coresTotal;     // all-or-nothing: both cores or no mark
+        S.core();
+        for(let i=0;i<18;i++) puff(c.x+8,c.y+8,"#FFC46B",2.8);
+        if(gotCore){ shake=Math.max(shake,4); setTimeout(()=>S.core(),150); }
+      }
+    }
+  }
+
+  /* ══════════════ PARTICLES ══════════════ */
+  function puff(x,y,color,spd,n){
+    n=n||1;
+    for(let i=0;i<n;i++){
+      const a=Math.random()*Math.PI*2, s=Math.random()*(spd||2);
+      parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,col:color,sz:Math.random()*2+1});
+    }
+  }
+  function updateParts(){
+    for(let i=parts.length-1;i>=0;i--){
+      const p=parts[i]; p.x+=p.vx; p.y+=p.vy; p.vx*=.94; p.vy=p.vy*.94+.08; p.life-=.035;
+      if(p.life<=0) parts.splice(i,1);
+    }
+  }
+
+  /* ══════════════ STEP ══════════════ */
+  function step(){
+    tick++;
+    const cx=player.x+player.w/2, cy=player.y+player.h/2;
+    player.zg = tileAt(Math.floor(cx/TILE),Math.floor(cy/TILE))==="Z";
+    player.wasGround=player.onGround; player.onGround=false;
+    updatePlats();
+
+    const L=held(K.left), R=held(K.right), U=held(K.up), D=held(K.down);
+    if(L!==R) player.face=L?-1:1;
+
+    if(player.zg){
+      if(L)player.vx-=ZG_THRUST; if(R)player.vx+=ZG_THRUST;
+      if(U)player.vy-=ZG_THRUST; if(D)player.vy+=ZG_THRUST;
+      player.vx*=ZG_DRAG; player.vy*=ZG_DRAG;
+      player.vx=Math.max(-ZG_MAX,Math.min(ZG_MAX,player.vx));
+      player.vy=Math.max(-ZG_MAX,Math.min(ZG_MAX,player.vy));
+      if(L||R||U||D){ player.thrust=6; if(tick%4===0) puff(cx-player.face*8,cy+6,"#5EE0C8",1.2); }
+      else player.thrust=Math.max(0,player.thrust-1);
+      player.airJump=true;
+    }else{
+      if(L&&!R)player.vx-=ACC; else if(R&&!L)player.vx+=ACC; else player.vx*=FRIC;
+      player.vx=Math.max(-RUN,Math.min(RUN,player.vx));
+      player.vy+=GRAV*player.gd;
+      player.vy=Math.max(-MAXFALL,Math.min(MAXFALL,player.vy));
+      player.thrust=Math.max(0,player.thrust-1);
+    }
+
+    moveX(player.vx);
+    moveY(player.vy);
+
+    if(player.onGround){
+      if(!player.wasGround){
+        S.land();
+        for(let i=0;i<5;i++) puff(cx+(Math.random()-.5)*14, player.gd>0?player.y+player.h:player.y,"#7C88A6",1.4);
+      }
+      player.coyote=COYOTE; player.airJump=true;
+    } else if(player.coyote>0) player.coyote--;
+    if(player.jbuf>0) player.jbuf--;
+
+    if(player.jbuf>0){
+      if(player.zg){ player.vy-=2.2*player.gd; player.jbuf=0; player.thrust=8; S.jump(); }
+      else if(player.coyote>0){ player.vy=-JUMP*player.gd; player.coyote=0; player.jbuf=0; S.jump(); }
+      else if(player.airJump){
+        if(kit.burst){
+          player.vy=-JUMP*BURST_SCALE*player.gd; player.airJump=false; player.jbuf=0; player.thrust=12; S.burst();
+          for(let i=0;i<8;i++) puff(cx, player.gd>0?player.y+player.h:player.y,"#FFC46B",2.2);
+        } else { player.jbuf=0; deny("burst"); }
+      }
+    }
+
+    // conveyor carry — applied after movement so it reads as the floor moving,
+    // not as a change in your own speed
+    if(player.onGround && !player.zg){
+      const fy = player.gd>0 ? player.y+player.h+1 : player.y-1;
+      const d = beltAt(Math.floor((player.x+player.w/2)/TILE), Math.floor(fy/TILE));
+      if(d) moveX(d*BELT*player.gd);
+    }
+    for(const cr of crates){
+      const d = beltAt(Math.floor((cr.x+cr.w/2)/TILE), Math.floor((cr.y+cr.h+1)/TILE));
+      if(d && cr.vy===0) pushCrate(cr, d*BELT);
+    }
+    crateFall(); checkFuses(); checkToggles(); checkProjectors(); stepPhantom(); checkCores();
+
+    for(const s of switches){
+      if(!s.latched && ovl(player,{x:s.x+4,y:s.y+4,w:24,h:24})){
+        s.latched=true; s.pop=1; shake=5; idleT=0; S.latch();
+        for(let i=0;i<14;i++) puff(s.x+16,s.y+16,"#5EE0C8",2.6);
+        if(doorsOpen()) S.door();
+      }
+      if(s.pop>0) s.pop-=.04;
+    }
+    for(const p of plates){
+      const z={x:p.x+2,y:p.y+8,w:28,h:24};
+      const ph=phantomBox();
+      p.was=p.on;
+      p.on = ovl(player,z) || crates.some(c=>ovl(c,z)) || (ph && ovl(ph,z));
+      if(p.on&&!p.was){ idleT=0; S.plate(); if(doorsOpen()) S.door(); }
+    }
+
+    const m = save.assist? 8 : 5;
+    if(hasChar(player.x+m,player.y+m,player.w-m*2,player.h-m*2,"^")) kill();
+    if(exitPt && ovl(player,{x:exitPt.x+2,y:exitPt.y+2,w:28,h:28})) winLevel();
+  }
+
+  function kill(){
+    if(dead||won) return;
+    dead=1; deaths++; runDeaths++; shake=11; idleT=0; S.die();
+    record(tele.deaths,{s:lvl,x:Math.round(player.x),y:Math.round(player.y),t:Math.round(lvlMs/1000)});
+    document.getElementById("deaths").textContent=deaths;
+    for(let i=0;i<26;i++) puff(player.x+10,player.y+13,"#FF7A5C",4);
+  }
+  function winLevel(){
+    if(won||dead) return;
+    won=1; shake=6; S.exit();
+    const secs=Math.max(1,Math.round(lvlMs/1000));
+    const cl=clearedSet(); cl.add(lvl); save.cleared=[...cl];
+    if(gotCore){ const cs=coreSet(); cs.add(lvl); save.cores=[...cs]; }
+    if(!save.best[lvl] || secs<save.best[lvl]) save.best[lvl]=secs;
+    save.last=Math.min(lvl+1,LEVELS.length-1);
+    record(tele.clears,{s:lvl,ms:Math.round(lvlMs),d:deaths,c:coresGot,ct:coresTotal,par:LEVELS[lvl].par});
+    saveNow(); buildMenu(); titleProgress();
+    for(let i=0;i<24;i++) puff(exitPt.x+16,exitPt.y+16,"#5EE0C8",3);
+  }
+
+  /* ══════════════ REWIND ══════════════ */
+  function snap(){
+    history.push({x:player.x,y:player.y,vx:player.vx,vy:player.vy,gd:player.gd,aj:player.airJump,f:player.face,
+      cr:crates.map(c=>c.anchored?null:{x:c.x,y:c.y,vy:c.vy}),
+      mp:plats.map(p=>({p:p.p,d:p.dir}))});
+    if(history.length>BUFFER()) history.shift();
+  }
+  function unsnap(){
+    const s=history.pop(); if(!s) return;
+    player.x=s.x;player.y=s.y;player.vx=s.vx;player.vy=s.vy;
+    player.gd=s.gd;player.airJump=s.aj;player.face=s.f;
+    s.cr.forEach((c,i)=>{ if(c&&crates[i]){crates[i].x=c.x;crates[i].y=c.y;crates[i].vy=c.vy;} });
+    s.mp.forEach((m,i)=>{ const p=plats[i]; if(!p) return; p.p=m.p; p.dir=m.d;
+      if(p.axis==="x") p.x=p.x0+p.p; else p.y=p.y0+p.p; });
+  }
+
+  /* ══════════════ UPDATE ══════════════ */
+  function resetSector(){ if(!LEVELS[lvl]) return; loadLevel(lvl); if(paused) show(null); S.reset(); }
+  function deny(which){ if(denyT>0&&denyKey===which) return; denyT=20; denyKey=which; S.deny(); }
+
+  function update(){
+    updateParts();
+    if(denyT>0) denyT--;
+    if(shake>0) shake-=.55;
+    if(paused) return;
+    if(!dead && !won){ lvlMs=performance.now()-lvlStart; idleT++; }
+
+    if(won){ won++; if(won>26) nextLevel(); return; }
+    if(dead){ dead++; if(dead>28) loadLevel(lvl); return; }
+
+    if(keys.KeyR && !kit.rewind) deny("rewind");
+    if(kit.rewind && keys.KeyR && history.length>1){
+      rewinding=true;
+      for(let i=0;i<REWIND_SPEED;i++) if(history.length>1) unsnap();
+      if(tick%9===0) S.tickr();
+      tick++;
+      for(const p of plates){
+        const z={x:p.x+2,y:p.y+8,w:28,h:24};
+        p.on = ovl(player,z) || crates.some(c=>ovl(c,z));
+      }
+    }else{ rewinding=false; step(); snap(); }
+    updateCam(false);
+  }
+  function nextLevel(){
+    if(!runMode || lvl+1>=LEVELS.length){ endRun(); return; }
+    loadLevel(lvl+1); showCard();
+  }
+
+  /* ══════════════ RENDER ══════════════ */
+  /* Visible tile window. Drawing a 73-wide sector tile-by-tile every frame is
+     wasted work when only 25 columns are on screen. */
+  let v0c=0,v1c=0,v0r=0,v1r=0;
+  function viewport(){
+    v0c=Math.max(0,Math.floor(cam.x/TILE));      v1c=Math.min(COLS-1,Math.ceil((cam.x+W)/TILE));
+    v0r=Math.max(0,Math.floor(cam.y/TILE));      v1r=Math.min(ROWS-1,Math.ceil((cam.y+H)/TILE));
+  }
+  function render(){
+    ctx.save();
+    if(shake>.2&&!reduceMotion&&save.shake) ctx.translate((Math.random()-.5)*shake,(Math.random()-.5)*shake);
+    ctx.fillStyle=TH.sky; ctx.fillRect(-24,-24,W+48,H+48);
+    const sg=ctx.createRadialGradient(W/2,H*.1,0,W/2,H*.1,H*1.25);
+    sg.addColorStop(0,TH.glow); sg.addColorStop(1,"rgba(0,0,0,0)");
+    ctx.fillStyle=sg; ctx.fillRect(0,0,W,H);
+    /* Starfield parallaxes against the camera — the cheapest depth cue there is,
+       and it makes a long sector read as travel instead of a treadmill. */
+    for(const s of stars){
+      const x=(((s.x-cam.x*s.sp*.55)%W)+W)%W;
+      const y=reduceMotion? s.y : ((((s.y-cam.y*s.sp*.55)+tick*s.sp*.3)%H)+H)%H;
+      ctx.globalAlpha=s.a*TH.starAlpha; ctx.fillStyle=TH.star; ctx.fillRect(x,y,s.r,s.r);
+    }
+    ctx.globalAlpha=1;
+    viewport();
+    ctx.translate(-Math.round(cam.x),-Math.round(cam.y));
+    ctx.strokeStyle=TH.grid; ctx.lineWidth=1; ctx.beginPath();
+    for(let c=v0c;c<=v1c+1;c++){ctx.moveTo(c*TILE+.5,cam.y);ctx.lineTo(c*TILE+.5,cam.y+H);}
+    for(let r=v0r;r<=v1r+1;r++){ctx.moveTo(cam.x,r*TILE+.5);ctx.lineTo(cam.x+W,r*TILE+.5);}
+    ctx.stroke();
+    drawFields(); drawTiles(); drawDoors(); drawPlats(); drawPlates();
+    drawSwitches(); drawToggles(); drawProjectors(); drawCores(); drawCrates(); drawExit();
+    drawPhantom();
+    drawGhosts(); drawParticles(); drawPlayer(); drawOverlays();
+    ctx.restore();
+  }
+  function drawFields(){
+    const t=reduceMotion?0:tick;
+    for(let r=v0r;r<=v1r;r++)for(let c=v0c;c<=v1c;c++){
+      if(grid[r][c]!=="Z") continue;
+      const x=c*TILE,y=r*TILE;
+      ctx.fillStyle="rgba(94,224,200,.065)"; ctx.fillRect(x,y,TILE,TILE);
+      ctx.fillStyle="rgba(94,224,200,.34)";
+      const ox=(c*13+r*7)%TILE, oy=((r*17+c*5)+t*.55)%TILE;
+      ctx.fillRect(x+ox,y+oy,2,2); ctx.fillRect(x+(ox+17)%TILE,y+(oy+19)%TILE,1.5,1.5);
+    }
+    ctx.strokeStyle="rgba(94,224,200,.32)"; ctx.lineWidth=1.5;
+    for(let r=v0r;r<=v1r;r++)for(let c=v0c;c<=v1c;c++){
+      if(grid[r][c]!=="Z") continue;
+      const x=c*TILE,y=r*TILE; ctx.beginPath();
+      if(tileAt(c,r-1)!=="Z"){ctx.moveTo(x,y+1);ctx.lineTo(x+TILE,y+1);}
+      if(tileAt(c,r+1)!=="Z"){ctx.moveTo(x,y+TILE-1);ctx.lineTo(x+TILE,y+TILE-1);}
+      if(tileAt(c-1,r)!=="Z"){ctx.moveTo(x+1,y);ctx.lineTo(x+1,y+TILE);}
+      if(tileAt(c+1,r)!=="Z"){ctx.moveTo(x+TILE-1,y);ctx.lineTo(x+TILE-1,y+TILE);}
+      ctx.stroke();
+    }
+  }
+  const hullish=(c,r)=>{const t=tileAt(c,r);return t==="#"||t===":";};
+  function drawTiles(){
+    for(let r=v0r;r<=v1r;r++)for(let c=v0c;c<=v1c;c++){
+      const ch=grid[r][c], x=c*TILE, y=r*TILE;
+      if(ch==="#"){
+        ctx.fillStyle=TH.hull; ctx.fillRect(x,y,TILE,TILE);
+        ctx.fillStyle=TH.hullIn; ctx.fillRect(x+4,y+4,TILE-8,TILE-8);
+        ctx.fillStyle=TH.hullEdge;
+        if(!hullish(c,r-1)) ctx.fillRect(x,y,TILE,2);
+        if(!hullish(c,r+1)) ctx.fillRect(x,y+TILE-2,TILE,2);
+        if(!hullish(c-1,r)) ctx.fillRect(x,y,2,TILE);
+        if(!hullish(c+1,r)) ctx.fillRect(x+TILE-2,y,2,TILE);
+        if(((c*7+r*11)%9)===0){ ctx.fillStyle=TH.rivet; ctx.fillRect(x+13,y+13,6,6); }
+      }
+      else if(ch===">"||ch==="<"){
+        const d = ch===">"?1:-1;
+        ctx.fillStyle=TH.hull; ctx.fillRect(x,y,TILE,TILE);
+        ctx.fillStyle=TH.hullIn; ctx.fillRect(x+2,y+8,TILE-4,TILE-10);
+        ctx.fillStyle=TH.hullEdge; ctx.fillRect(x,y,TILE,3);
+        // travelling chevrons: the belt has to read as moving even at a glance
+        const off = reduceMotion ? 0 : (tick*1.6*d)%16;
+        ctx.fillStyle="#5EE0C8"; ctx.globalAlpha=.55;
+        for(let i=-1;i<3;i++){
+          const bx = x + ((i*16 + off) + 32) % 32;
+          ctx.beginPath();
+          ctx.moveTo(bx, y+4); ctx.lineTo(bx+5*d, y+7); ctx.lineTo(bx, y+10);
+          ctx.closePath(); ctx.fill();
+        }
+        ctx.globalAlpha=1;
+      }
+      else if(ch===":"){
+        /* Same silhouette as hull. The tell is one shade on the inner face, a
+           missing rivet, and a hairline seam — enough to reward looking, not
+           enough to give itself away in passing. */
+        ctx.fillStyle=TH.hull; ctx.fillRect(x,y,TILE,TILE);
+        ctx.fillStyle=TH.hullIn; ctx.fillRect(x+4,y+4,TILE-8,TILE-8);
+        ctx.fillStyle=TH.hullEdge;
+        if(!hullish(c,r-1)) ctx.fillRect(x,y,TILE,2);
+        if(!hullish(c,r+1)) ctx.fillRect(x,y+TILE-2,TILE,2);
+        if(!hullish(c-1,r)) ctx.fillRect(x,y,2,TILE);
+        if(!hullish(c+1,r)) ctx.fillRect(x+TILE-2,y,2,TILE);
+        const near = player ? Math.hypot((player.x+10)-(x+16),(player.y+13)-(y+16)) : 999;
+      const tell = Math.max(0, 1 - Math.max(0, near-40)/70);   // fades in within ~3 tiles
+      ctx.fillStyle="rgba(232,227,216,"+(.05+tell*.10).toFixed(3)+")";
+      ctx.fillRect(x+4,y+15,TILE-8,1);
+      if(tell>0){
+        ctx.save();
+        ctx.globalAlpha=tell*.55; ctx.strokeStyle="#A78BFA"; ctx.lineWidth=1;
+        ctx.setLineDash([3,4]); ctx.lineDashOffset=reduceMotion?0:-tick*.3;
+        ctx.strokeRect(x+3.5,y+3.5,TILE-7,TILE-7);
+        ctx.restore();
+      }
+      }
+      else if(ch==="-"){
+        ctx.fillStyle="#20283F"; ctx.fillRect(x,y,TILE,7);
+        ctx.fillStyle="#46557E"; ctx.fillRect(x,y,TILE,2);
+        ctx.fillStyle="rgba(70,85,126,.5)";
+        for(let i=0;i<3;i++) ctx.fillRect(x+4+i*10,y+8,5,2);
+      }
+      else if(ch==="~"){
+        const k=r*COLS+c, f=fuses.get(k);
+        const j=(f!==undefined&&!reduceMotion&&save.shake)?(Math.random()-.5)*2.4:0;
+        const a=f!==undefined?.5+.5*Math.sin(tick*.6):1;
+        ctx.save(); ctx.translate(j,j);
+        ctx.fillStyle="#241d3a"; ctx.fillRect(x,y,TILE,TILE);
+        ctx.globalAlpha=a; ctx.strokeStyle="#A78BFA"; ctx.lineWidth=1.5;
+        ctx.strokeRect(x+1.5,y+1.5,TILE-3,TILE-3);
+        ctx.beginPath(); ctx.moveTo(x+5,y+TILE-6); ctx.lineTo(x+13,y+11);
+        ctx.lineTo(x+19,y+20); ctx.lineTo(x+TILE-5,y+7); ctx.stroke();
+        ctx.globalAlpha=1; ctx.restore();
+      }
+      else if(ch==="="||ch==="%"){
+        const solid=(ch==="="&&phase===0)||(ch==="%"&&phase===1);
+        const col=ch==="="?"#FFC46B":"#A78BFA";
+        if(solid){
+          ctx.fillStyle=ch==="="?"#2E2718":"#241d3a"; ctx.fillRect(x,y,TILE,TILE);
+          ctx.strokeStyle=col; ctx.lineWidth=2; ctx.strokeRect(x+1,y+1,TILE-2,TILE-2);
+          ctx.globalAlpha=.5; ctx.beginPath();
+          ctx.moveTo(x+6,y+16);ctx.lineTo(x+16,y+6);ctx.lineTo(x+26,y+16);ctx.lineTo(x+16,y+26);
+          ctx.closePath(); ctx.stroke(); ctx.globalAlpha=1;
+        }else{
+          ctx.globalAlpha=.20; ctx.strokeStyle=col; ctx.lineWidth=1;
+          ctx.setLineDash([3,4]); ctx.strokeRect(x+2.5,y+2.5,TILE-5,TILE-5);
+          ctx.setLineDash([]); ctx.globalAlpha=1;
+        }
+      }
+      else if(ch==="^"){
+        const below=["#","~","-"].includes(tileAt(c,r+1)), above=["#","~","-"].includes(tileAt(c,r-1));
+        ctx.fillStyle=TH.hazard+"22"; ctx.fillRect(x,y,TILE,TILE);
+        ctx.fillStyle=TH.hazard;
+        const sp=(bx,by,d)=>{ctx.beginPath();ctx.moveTo(bx,by);ctx.lineTo(bx+8,by-14*d);ctx.lineTo(bx+16,by);ctx.closePath();ctx.fill();};
+        if(below||(!below&&!above)){ sp(x,y+TILE-2,1); sp(x+16,y+TILE-2,1); }
+        if(above||(!below&&!above)){ sp(x,y+2,-1); sp(x+16,y+2,-1); }
+      }
+    }
+  }
+  function drawDoors(){
+    const open=doorsOpen();
+    for(let r=v0r;r<=v1r;r++)for(let c=v0c;c<=v1c;c++){
+      if(grid[r][c]!=="D") continue;
+      const x=c*TILE,y=r*TILE;
+      if(open){
+        ctx.strokeStyle="rgba(94,224,200,.4)"; ctx.lineWidth=1; ctx.strokeRect(x+.5,y+.5,TILE-1,TILE-1);
+        ctx.fillStyle="rgba(94,224,200,.07)"; ctx.fillRect(x,y,TILE,TILE);
+        ctx.fillStyle="rgba(94,224,200,.5)"; ctx.fillRect(x+2,y+2,6,2); ctx.fillRect(x+TILE-8,y+TILE-4,6,2);
+      }else{
+        ctx.fillStyle="#2A2036"; ctx.fillRect(x,y,TILE,TILE);
+        ctx.fillStyle="#FFC46B"; for(let i=0;i<4;i++) ctx.fillRect(x+3,y+5+i*7,TILE-6,3);
+        ctx.strokeStyle="#FFC46B"; ctx.lineWidth=1; ctx.strokeRect(x+.5,y+.5,TILE-1,TILE-1);
+      }
+    }
+  }
+  function drawPlats(){
+    for(const p of plats){
+      ctx.fillStyle="#232B42"; ctx.fillRect(p.x,p.y,p.w,p.h);
+      ctx.fillStyle="#3C4A70"; ctx.fillRect(p.x,p.y,p.w,3);
+      ctx.fillStyle="#11162a"; ctx.fillRect(p.x+3,p.y+8,p.w-6,p.h-11);
+      ctx.fillStyle="#FFC46B";
+      const d=p.axis==="x"?(p.dir>0?1:-1):0;
+      for(let i=0;i<Math.floor(p.w/TILE);i++){
+        const bx=p.x+i*TILE+16; ctx.globalAlpha=.55;
+        if(d>0){ctx.beginPath();ctx.moveTo(bx-4,p.y+16);ctx.lineTo(bx+3,p.y+20);ctx.lineTo(bx-4,p.y+24);ctx.closePath();ctx.fill();}
+        else if(d<0){ctx.beginPath();ctx.moveTo(bx+4,p.y+16);ctx.lineTo(bx-3,p.y+20);ctx.lineTo(bx+4,p.y+24);ctx.closePath();ctx.fill();}
+        else ctx.fillRect(bx-4,p.y+19,8,2);
+        ctx.globalAlpha=1;
+      }
+      ctx.strokeStyle="rgba(60,74,112,.9)"; ctx.lineWidth=1; ctx.strokeRect(p.x+.5,p.y+.5,p.w-1,p.h-1);
+    }
+  }
+  function drawPlates(){
+    for(const p of plates){
+      ctx.fillStyle="#11162a"; ctx.fillRect(p.x+1,p.y+TILE-5,TILE-2,5);
+      ctx.fillStyle=p.on?"#5EE0C8":"#3A4460";
+      ctx.fillRect(p.x+3,p.y+TILE-(p.on?7:11),TILE-6,p.on?5:4);
+      if(p.on){ ctx.globalAlpha=.18; ctx.fillStyle="#5EE0C8"; ctx.fillRect(p.x,p.y+TILE-18,TILE,18); ctx.globalAlpha=1; }
+      ctx.fillStyle=p.on?"rgba(94,224,200,.8)":"rgba(124,136,166,.6)";
+      ctx.fillRect(p.x+5,p.y+TILE-3,3,2); ctx.fillRect(p.x+TILE-8,p.y+TILE-3,3,2);
+    }
+  }
+  function drawSwitches(){
+    for(const s of switches){
+      const cx=s.x+16, cy=s.y+16;
+      ctx.strokeStyle=s.latched?"#5EE0C8":"#7C88A6"; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(cx,cy,9,0,Math.PI*2); ctx.stroke();
+      if(s.latched){
+        ctx.fillStyle="#5EE0C8"; ctx.beginPath(); ctx.arc(cx,cy,5,0,Math.PI*2); ctx.fill();
+        ctx.globalAlpha=.16; ctx.beginPath();
+        ctx.arc(cx,cy,15+(reduceMotion?0:Math.sin(tick/12)*2),0,Math.PI*2); ctx.fill();
+        if(s.pop>0){ ctx.globalAlpha=s.pop*.5; ctx.strokeStyle="#5EE0C8"; ctx.lineWidth=2;
+          ctx.beginPath(); ctx.arc(cx,cy,9+(1-s.pop)*22,0,Math.PI*2); ctx.stroke(); }
+        ctx.globalAlpha=1;
+      }else{ ctx.fillStyle="#3A4460"; ctx.beginPath(); ctx.arc(cx,cy,4,0,Math.PI*2); ctx.fill(); }
+    }
+  }
+  function drawToggles(){
+    for(const t of toggles){
+      const cx=t.x+16, cy=t.y+16, col=phase===0?"#FFC46B":"#A78BFA";
+      ctx.strokeStyle=col; ctx.lineWidth=2;
+      ctx.beginPath();
+      for(let i=0;i<6;i++){ const a=Math.PI/3*i+(reduceMotion?0:tick/60);
+        const px=cx+Math.cos(a)*10, py=cy+Math.sin(a)*10; i?ctx.lineTo(px,py):ctx.moveTo(px,py); }
+      ctx.closePath(); ctx.stroke();
+      ctx.fillStyle=col; ctx.globalAlpha=.5; ctx.beginPath(); ctx.arc(cx,cy,4,0,Math.PI*2); ctx.fill();
+      if(t.pop>0){ ctx.globalAlpha=t.pop*.5; ctx.lineWidth=2;
+        ctx.beginPath(); ctx.arc(cx,cy,10+(1-t.pop)*24,0,Math.PI*2); ctx.stroke(); }
+      ctx.globalAlpha=1;
+    }
+  }
+  function drawProjectors(){
+    for(const p of projectors){
+      const cx=p.x+16, cy=p.y+16;
+      ctx.strokeStyle=p.used?"#3E4763":"#5EE0C8"; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(cx,cy,10,-2.2,2.2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx,cy,5,0,Math.PI*2); ctx.stroke();
+      if(!p.used && !reduceMotion){
+        ctx.globalAlpha=.25+.2*Math.sin(tick/14); ctx.fillStyle="#5EE0C8";
+        ctx.beginPath(); ctx.arc(cx,cy,4,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+      }
+      if(p.pop>0){ ctx.globalAlpha=p.pop*.5; ctx.strokeStyle="#5EE0C8";
+        ctx.beginPath(); ctx.arc(cx,cy,10+(1-p.pop)*26,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1; }
+    }
+  }
+  function drawPhantom(){
+    const b=phantomBox(); if(!b) return;
+    ctx.globalAlpha=.4; ctx.fillStyle="#5EE0C8"; ctx.fillRect(b.x,b.y,b.w,b.h);
+    ctx.globalAlpha=.75; ctx.strokeStyle="#5EE0C8"; ctx.lineWidth=1;
+    ctx.strokeRect(b.x+.5,b.y+.5,b.w-1,b.h-1);
+    ctx.globalAlpha=.5; ctx.fillStyle="#0C1020"; ctx.fillRect(b.x+2,b.y+4,b.w-4,7);
+    ctx.globalAlpha=1;
+  }
+  function drawCores(){
+    for(const c of cores){
+      if(c.got) continue;
+      const cx=c.x+8, cy=c.y+8, b=reduceMotion?0:Math.sin(tick/18)*2;
+      ctx.save(); ctx.translate(cx,cy+b); ctx.rotate(reduceMotion?0:tick/70);
+      ctx.strokeStyle="#FFC46B"; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(0,-8);ctx.lineTo(8,0);ctx.lineTo(0,8);ctx.lineTo(-8,0);ctx.closePath(); ctx.stroke();
+      ctx.fillStyle="rgba(255,196,107,.35)"; ctx.fill();
+      ctx.restore();
+      ctx.globalAlpha=.14; ctx.fillStyle="#FFC46B";
+      ctx.beginPath(); ctx.arc(cx,cy+b,14,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+    }
+  }
+  function drawCrates(){
+    for(const c of crates){
+      ctx.fillStyle=c.anchored?"#2B2740":"#3A4460"; ctx.fillRect(c.x,c.y,c.w,c.h);
+      ctx.strokeStyle=c.anchored?"#A78BFA":"#8C97B4"; ctx.lineWidth=2;
+      ctx.strokeRect(c.x+1,c.y+1,c.w-2,c.h-2);
+      if(c.anchored){
+        ctx.beginPath(); ctx.moveTo(c.x+7,c.y+7); ctx.lineTo(c.x+c.w-7,c.y+c.h-7);
+        ctx.moveTo(c.x+c.w-7,c.y+7); ctx.lineTo(c.x+7,c.y+c.h-7); ctx.stroke();
+      }else{
+        ctx.strokeStyle="rgba(232,227,216,.32)"; ctx.lineWidth=1;
+        ctx.strokeRect(c.x+6,c.y+6,c.w-12,c.h-12);
+      }
+    }
+  }
+  function drawExit(){
+    if(!exitPt) return;
+    const cx=exitPt.x+16, cy=exitPt.y+16, pu=reduceMotion?0:Math.sin(tick/16)*2;
+    ctx.strokeStyle="#5EE0C8"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(cx,cy,11+pu,0,Math.PI*2); ctx.stroke();
+    ctx.globalAlpha=.3; ctx.beginPath(); ctx.arc(cx,cy,15+pu*1.7,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1;
+    ctx.fillStyle="rgba(94,224,200,.22)"; ctx.beginPath(); ctx.arc(cx,cy,7,0,Math.PI*2); ctx.fill();
+    for(let i=0;i<4;i++){
+      const a=tick/40+i*Math.PI/2;
+      ctx.fillStyle="rgba(94,224,200,.7)";
+      ctx.fillRect(cx+Math.cos(a)*13-1,cy+Math.sin(a)*13-1,2,2);
+    }
+  }
+  function drawGhosts(){
+    if(!rewinding) return;
+    for(let i=history.length-1,n=0;i>=0&&n<8;i-=8,n++){
+      const g=history[i]; ctx.globalAlpha=.11*(1-n/8);
+      ctx.fillStyle="#A78BFA"; ctx.fillRect(g.x,g.y,player.w,player.h);
+    }
+    ctx.globalAlpha=1;
+  }
+  function drawParticles(){
+    for(const p of parts){ ctx.globalAlpha=Math.max(0,p.life); ctx.fillStyle=p.col; ctx.fillRect(p.x,p.y,p.sz,p.sz); }
+    ctx.globalAlpha=1;
+  }
+  function drawPlayer(){
+    if(dead) return;
+    const p=player, up=p.gd===1;
+    if(p.thrust>0){
+      ctx.globalAlpha=Math.min(1,p.thrust/12);
+      const fy=up?p.y+p.h:p.y-9;
+      ctx.fillStyle="#FFC46B"; ctx.fillRect(p.x+5,fy,4,9); ctx.fillRect(p.x+p.w-9,fy,4,9);
+      ctx.fillStyle="#FF7A5C"; ctx.fillRect(p.x+6,fy+(up?4:0),2,5); ctx.fillRect(p.x+p.w-8,fy+(up?4:0),2,5);
+      ctx.globalAlpha=1;
+    }
+    ctx.fillStyle="#E8E3D8";
+    ctx.beginPath();
+    const x=p.x,y=p.y,w=p.w,h=p.h,r=3;
+    ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();ctx.fill();
+    ctx.fillStyle="#11162a"; ctx.fillRect(p.x+2,p.y+(up?4:p.h-12),p.w-4,8);
+    ctx.fillStyle=p.zg?"#5EE0C8":(p.airJump&&kit.burst?"#5EE0C8":"#7C88A6");
+    ctx.fillRect(p.face>0?p.x+p.w-8:p.x+3, p.y+(up?6:p.h-10),5,4);
+    ctx.fillStyle="rgba(124,136,166,.5)"; ctx.fillRect(p.x+3,p.y+(up?p.h-6:2),p.w-6,3);
+    ctx.strokeStyle="rgba(7,9,18,.65)"; ctx.lineWidth=1; ctx.strokeRect(p.x+.5,p.y+.5,p.w-1,p.h-1);
+  }
+  function drawOverlays(){
+    ctx.translate(Math.round(cam.x),Math.round(cam.y));   // overlays are screen-space
+    if(rewinding&&!reduceMotion){
+      ctx.fillStyle="rgba(167,139,250,.07)"; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle="rgba(167,139,250,.11)";
+      for(let y=(tick*7)%6;y<H;y+=6) ctx.fillRect(0,y,W,1.5);
+      ctx.strokeStyle="rgba(167,139,250,.5)"; ctx.lineWidth=2; ctx.strokeRect(1,1,W-2,H-2);
+    }
+    if(player&&player.gd===-1&&!rewinding){
+      ctx.strokeStyle="rgba(255,122,92,.22)"; ctx.lineWidth=2; ctx.strokeRect(1,1,W-2,H-2);
+    }
+    if(dead){ ctx.fillStyle="rgba(255,122,92,"+Math.max(0,.45-dead/70)+")"; ctx.fillRect(0,0,W,H); }
+    if(won){ ctx.fillStyle="rgba(94,224,200,"+Math.min(.5,won/40)+")"; ctx.fillRect(0,0,W,H); }
+    const g=ctx.createRadialGradient(W/2,H/2,H*.35,W/2,H/2,H*.85);
+    g.addColorStop(0,"rgba(0,0,0,0)"); g.addColorStop(1,"rgba(0,0,0,"+TH.vignette+")");
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  }
+
+  /* ══════════════ HUD ══════════════ */
+  const fmt=s=>Math.floor(s/60)+":"+String(Math.floor(s%60)).padStart(2,"0");
+  function chip(node,locked,active,key,label){
+    node.textContent=label;
+    node.classList.toggle("locked",locked);
+    node.classList.toggle("on",!locked&&active);
+    node.classList.toggle("deny",denyT>0&&denyKey===key);
+  }
+  function hud(){
+    const f=document.getElementById("bufFill"), pct=history.length/BUFFER()*100;
+    f.style.width=kit.rewind?pct.toFixed(1)+"%":"0%";
+    f.classList.toggle("low",rewinding&&pct<18);
+    document.getElementById("bufWrap").classList.toggle("locked",!kit.rewind);
+    chip(document.getElementById("chipBurst"),!kit.burst,!!player&&player.airJump,"burst","BURST");
+    chip(document.getElementById("chipFlip"),!kit.flip,!!player&&player.gd===-1,"flip",
+         player&&player.gd===-1?"FLIP ↑":"FLIP ↓");
+    chip(document.getElementById("chipRwd"),!kit.rewind,rewinding,"rewind","RWND");
+    document.getElementById("clock").textContent=fmt(lvlMs/1000);
+    const cd=document.getElementById("coreDot");
+    cd.classList.toggle("got",gotCore);
+    cd.innerHTML = coresTotal ? "◆ "+coresGot+"/"+coresTotal+"<span class=\"lblword\"> CORES</span>" : "";
+    cd.style.display=coresTotal?"":"none";
+    document.getElementById("nudge").classList.toggle("show",!paused&&idleT>2400);
+    // a stall is 25s in one sector without touching anything — the shape of "I'm lost"
+    if(!paused && idleT===1500 && player)
+      record(tele.stalls,{s:lvl,x:Math.round(player.x),y:Math.round(player.y)});
+  }
+
+  /* ══════════════ SCREENS ══════════════ */
+  const el=id=>document.getElementById(id);
+  const scr={title:el("scrTitle"),card:el("scrCard"),menu:el("scrMenu"),opt:el("scrOpt"),end:el("scrEnd")};
+  function show(s){
+    Object.values(scr).forEach(x=>x.classList.remove("show"));
+    if(s)s.classList.add("show");
+    paused=!!s; setPaused(paused);
+    setDrone(themeFor(ZONES.indexOf(zoneOf(lvl))).drone);
+  }
+  function showCard(){
+    const z=zoneOf(lvl), L=LEVELS[lvl], k=L.kit||"";
+    el("cardZone").textContent=z.name;
+    el("cardNum").textContent="SECTOR "+String(lvl+1).padStart(2,"0")+" · "+LEVELS.length;
+    el("cardTitle").textContent=L.name;
+    el("cardLog").textContent = (lvl===z.at)? z.log : "";
+    el("cardHint").textContent=L.hint;
+    const on=["JUMP"],off=[];
+    (k.includes("B")?on:off).push("BURST");(k.includes("F")?on:off).push("FLIP");(k.includes("R")?on:off).push("REWIND");
+    el("cardKit").innerHTML="Loadout &nbsp;"+on.join(" · ")+
+      (off.length?"<span style='color:#3E4763;text-decoration:line-through'> &nbsp;"+off.join(" · ")+"</span>":"")+
+      "<br><span style='color:#3E4763'>PAR "+fmt(L.par)+(save.best[lvl]?" &nbsp;·&nbsp; BEST "+fmt(save.best[lvl]):"")+"</span>";
+    show(scr.card);
+  }
+  function titleProgress(){
+    el("titleProg").textContent=save.cleared.length+" / "+LEVELS.length+" sectors · "+
+      save.cores.length+" / "+LEVELS.length+" cores";
+    el("btnCont").style.display=save.cleared.length?"":"none";
+  }
+  function endRun(){
+    el("endSec").textContent=save.cleared.length+" / "+LEVELS.length;
+    el("endCore").textContent=save.cores.length+" / "+LEVELS.length;
+    el("endTime").textContent=fmt((performance.now()-runStart)/1000);
+    el("endDeaths").textContent=runDeaths;
+    const full=save.cleared.length===LEVELS.length, allc=save.cores.length===LEVELS.length;
+    el("endRank").textContent = allc? "Full salvage — every core recovered"
+      : full? "Station cleared. "+(LEVELS.length-save.cores.length)+" cores still out there."
+      : "Run ended.";
+    show(scr.end);
+  }
+  function buildMenu(){
+    const g=el("lvlGrid"); if(!g) return;
+    g.innerHTML=""; const cl=clearedSet(), cs=coreSet();
+    let zi=-1;
+    LEVELS.forEach((L,i)=>{
+      const z=ZONES.indexOf(zoneOf(i));
+      if(z!==zi){ zi=z; const h=document.createElement("div"); h.className="zhead"; h.textContent=ZONES[z].name; g.appendChild(h); }
+      const b=document.createElement("button");
+      b.className="lvlBtn"+(cl.has(i)?" done":"");
+      const k=L.kit||"";
+      const mark=(cs.has(i)?"<span style='color:var(--amber)'>◆</span>":"<span style='color:#2A3350'>◆</span>");
+      b.innerHTML="<b><span class='mk'>"+mark+"</span>"+String(i+1).padStart(2,"0")+" · "+L.name+"</b>"+
+        "JUMP"+(k.includes("B")?"·BURST":"")+(k.includes("F")?"·FLIP":"")+(k.includes("R")?"·REWIND":"")+
+        (save.best[i]?"<br>best "+fmt(save.best[i]):"");
+      b.addEventListener("click",()=>{runMode=false;loadLevel(i);showCard();});
+      g.appendChild(b);
+    });
+  }
+  const refreshDrone=()=>setDrone(themeFor(ZONES.indexOf(zoneOf(lvl))).drone);
+  function applyOpts(){
+    const s=el("saveState");
+    if(s){ s.textContent=backendLabel();
+           s.style.color = backendLabel().startsWith("not") ? "var(--oxide)" : "var(--dim)"; }
+    el("optVol").value=Math.round(save.vol*100);
+    el("volVal").textContent=Math.round(save.vol*100)+"%";
+    const amb = save.amb===undefined ? .35 : save.amb;
+    el("optAmb").value=Math.round(amb*100);
+    el("ambVal").textContent = amb<=0 ? "off" : Math.round(amb*100)+"%";
+    el("optShake").classList.toggle("on",!!save.shake);
+    el("optShake").textContent=save.shake?"On":"Off";
+    el("optAssist").classList.toggle("on",!!save.assist);
+    el("optAssist").textContent=save.assist?"On":"Off";
+  }
+  function startRun(from){
+    runMode=true; runStart=performance.now(); runDeaths=0;
+    loadLevel(from); showCard();
+  }
+
+  /* ══════════════ INPUT ══════════════ */
+  function doJump(){ if(player) player.jbuf=JBUF; }
+  function doFlip(){
+    if(!player) return;
+    if(!kit.flip){ deny("flip"); return; }
+    player.gd*=-1; player.vy=0; player.airJump=true; shake=4; S.flip();
+    for(let i=0;i<10;i++) puff(player.x+10,player.y+13,"#FF7A5C",2.2);
+  }
+  addEventListener("keydown",e=>{
+    if(["Space","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.code)) e.preventDefault();
+    if(scr.card.classList.contains("show")){ show(null); return; }
+    if(e.code==="Escape"){
+      if(scr.opt.classList.contains("show")) show(scr.menu);
+      else if(scr.menu.classList.contains("show")) show(null);
+      else if(!scr.title.classList.contains("show")&&!scr.end.classList.contains("show")) show(scr.menu);
+      return;
+    }
+    if(Object.values(scr).some(s=>s.classList.contains("show"))) return;
+    keys[e.code]=true;
+    if(e.code==="Space"&&!e.repeat) doJump();
+    if(e.code==="KeyF"&&!e.repeat) doFlip();
+    if(e.code==="KeyK") resetSector();
+  });
+  addEventListener("keyup",e=>{
+    keys[e.code]=false;
+    if(e.code==="Space"&&player&&!player.zg&&player.vy*player.gd<-CUT) player.vy=-CUT*player.gd;
+  });
+  addEventListener("blur",()=>{for(const k in keys)keys[k]=false;});
+
+  el("btnStart").addEventListener("click",()=>startRun(0));
+  el("btnCont").addEventListener("click",()=>startRun(save.last||0));
+  el("btnSel").addEventListener("click",()=>show(scr.menu));
+  el("btnEndSel").addEventListener("click",()=>show(scr.menu));
+  el("btnOpt").addEventListener("click",()=>show(scr.opt));
+  el("btnOpt2").addEventListener("click",()=>show(scr.opt));
+  el("btnOptBack").addEventListener("click",()=>show(save.cleared.length||runMode?scr.menu:scr.title));
+  el("btnResume").addEventListener("click",()=>show(null));
+  el("btnRestart").addEventListener("click",resetSector);
+  el("btnQuit").addEventListener("click",()=>{runMode=false;show(scr.title);});
+  el("btnAgain").addEventListener("click",()=>startRun(0));
+  ["mousedown","touchstart"].forEach(ev=>
+    el("btnReset").addEventListener(ev,e=>{e.preventDefault();e.stopPropagation();resetSector();el("btnReset").blur();},{passive:false}));
+  el("optVol").addEventListener("input",e=>{save.vol=e.target.value/100;applyOpts();refreshDrone();saveNow();});
+el("optAmb").addEventListener("input",e=>{save.amb=e.target.value/100;applyOpts();refreshDrone();saveNow();});
+  el("optShake").addEventListener("click",()=>{save.shake=save.shake?0:1;applyOpts();saveNow();});
+  el("optAssist").addEventListener("click",()=>{save.assist=save.assist?0:1;applyOpts();saveNow();});
+  el("btnTele").addEventListener("click",async()=>{
+  const blob=JSON.stringify({v:1,when:Date.now(),tele:save.tele,
+    best:save.best,cleared:save.cleared,cores:save.cores});
+  const b=el("btnTele");
+  // Download first: navigator.clipboard needs a secure context, and a
+  // double-clicked file:// page isn't one, so copying silently failed there.
+  try{
+    const url=URL.createObjectURL(new Blob([blob],{type:"application/json"}));
+    const a=document.createElement("a");
+    a.href=url; a.download="drift-playtest.json"; a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    b.textContent="Saved drift-playtest.json";
+  }catch(e){
+    try{ await navigator.clipboard.writeText(blob); b.textContent="Copied to clipboard"; }
+    catch(e2){ console.log(blob); b.textContent="Written to console"; }
+  }
+  setTimeout(()=>b.textContent="Export playtest data",2800);
+});
+el("btnWipe").addEventListener("click",()=>{
+    wipe().then(()=>{buildMenu();titleProgress();});
+    el("btnWipe").textContent="Erased";
+    setTimeout(()=>el("btnWipe").textContent="Erase progress",1400);
+  });
+
+  if(matchMedia("(pointer: coarse)").matches){
+    el("touch").classList.add("on");
+    const bind=(id,down,up)=>{
+      const n=el(id);
+      n.addEventListener("touchstart",e=>{e.preventDefault();down();},{passive:false});
+      n.addEventListener("touchend",e=>{e.preventDefault();if(up)up();},{passive:false});
+      n.addEventListener("touchcancel",()=>{if(up)up();});
+    };
+    bind("tL",()=>keys.tL=true,()=>keys.tL=false);
+    bind("tR",()=>keys.tR=true,()=>keys.tR=false);
+    bind("tD",()=>keys.tD=true,()=>keys.tD=false);
+    bind("tJ",()=>{if(!paused)doJump();},null);
+    bind("tF",()=>{if(!paused)doFlip();},null);
+    bind("tW",()=>keys.KeyR=true,()=>keys.KeyR=false);
+    bind("tK",()=>{if(!paused)resetSector();},null);
+    el("scrCard").addEventListener("touchstart",()=>{if(scr.card.classList.contains("show"))show(null);});
+  }
+
+  /* ══════════════ MAIN ══════════════ */
+  buildMenu(); titleProgress(); applyOpts();
+  loadSave();
+  loadLevel(0);
+  let acc=0,last=performance.now();
+  function loop(now){
+    const dt=Math.min(now-last,100); last=now; acc+=dt;
+    let guard=0;
+    while(acc>=1000/60 && guard++<4){ update(); acc-=1000/60; }
+    if(acc>1000/60) acc=0;
+    render(); hud();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ── entry ─────────────────────────────── */
+loadSave().finally(boot);
+})();
+</script>
+</body>
+</html>

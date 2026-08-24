@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="DRIFT — a sci-fi puzzle platformer about rewinding time, inverting gravity, and one-way decisions.">
+<title>DRIFT — Station Salvage</title>
+<link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+<div id="shell">
+  <div id="frame">
+    <canvas id="cv" width="800" height="480"></canvas>
+    
+
+    <div id="hud">
+      <div class="hudrow" id="hudTop">
+        <span id="zone">ZONE I · HULL</span>
+        <span class="tag" id="lvlNum">01</span>
+        <span id="lvlName">COLD BOOT</span>
+        <span id="clock">0:00</span>
+      </div>
+      <div id="hint"></div>
+      <div class="hudrow" id="hudBot">
+        <span class="tag">BUF</span><div id="bufWrap"><div id="bufFill"></div></div>
+        <span class="chip" id="chipBurst">BURST</span>
+        <span class="chip" id="chipFlip">FLIP ↓</span>
+        <span class="chip" id="chipRwd">RWND</span>
+        <button class="chip act" id="btnReset" type="button">⟲ RESET</button>
+        <span id="coreDot" style="margin-left:auto">◆<span class="lblword"> CORE</span></span>
+        <span><span class="lblword">LOSS </span><b id="deaths" style="color:var(--oxide)">0</b></span>
+      </div>
+      <div id="nudge">Stuck? <b>⟲ RESET</b> or <b>K</b> restarts this sector</div>
+    </div>
+
+    <div id="touch">
+      <div class="tbtn" id="tL">◀</div><div class="tbtn" id="tR">▶</div><div class="tbtn" id="tD">▼</div>
+      <div class="tbtn" id="tJ">JUMP</div><div class="tbtn" id="tF">FLIP</div>
+      <div class="tbtn" id="tW">RWND</div><div class="tbtn" id="tK">⟲</div>
+    </div>
+
+    <div class="screen show" id="scrTitle">
+      <h1 class="title">DRIFT</h1>
+      <div class="sub">Station Salvage</div>
+      <div class="sub" id="titleProg" style="color:var(--teal)"></div>
+      <div class="keys">
+        <span><b>A / D</b></span><span>walk &nbsp;·&nbsp; <b>S</b> drop through plating</span>
+        <span><b>SPACE</b></span><span>jump — tap again mid-air for the suit burst</span>
+        <span><b>F</b></span><span>invert gravity</span>
+        <span><b>R</b> (hold)</span><span>rewind time</span>
+        <span><b>W A S D</b></span><span>thrust, inside null fields</span>
+        <span><b>K</b> · <b>ESC</b></span><span>restart sector · pause</span>
+      </div>
+      <div class="sub" style="color:var(--amber);letter-spacing:.08em;text-transform:none">
+        Each sector issues its own loadout. Locked gear stays locked.</div>
+      <div class="row">
+        <button id="btnStart">Begin</button>
+        <button id="btnCont" class="ghost">Continue</button>
+        <button id="btnSel" class="ghost">Sectors</button>
+        <button id="btnOpt" class="ghost">Settings</button>
+      </div>
+    </div>
+
+    <div class="screen" id="scrCard">
+      <div class="sub" id="cardZone">ZONE I · HULL</div>
+      <div class="sub" id="cardNum">SECTOR 01</div>
+      <div id="cardTitle">COLD BOOT</div>
+      <div id="cardLog"></div>
+      <div id="cardHint"></div>
+      <div class="sub" id="cardKit"></div>
+      <div class="sub" style="color:var(--hull-lit)">press any key</div>
+    </div>
+
+    <div class="screen" id="scrMenu">
+      <div class="sub">Sector list</div>
+      <div id="lvlGrid"></div>
+      <div class="row actions">
+        <button id="btnResume">Resume</button>
+        <button id="btnRestart" class="ghost" style="color:var(--amber);border-color:var(--amber)">Reset sector</button>
+        <button id="btnOpt2" class="ghost">Settings</button>
+        <button id="btnQuit" class="ghost">Title</button>
+      </div>
+    </div>
+
+    <div class="screen" id="scrOpt">
+      <div class="sub">Settings</div>
+      <div class="optrow"><span>Volume</span><input type="range" id="optVol" min="0" max="100" step="5"><b id="volVal">100%</b></div>
+      <div class="optrow"><span>Ambience</span><input type="range" id="optAmb" min="0" max="100" step="5"><b id="ambVal">35%</b></div>
+      <div class="optrow"><span>Screen shake</span><span></span><div class="tog on" id="optShake">On</div></div>
+      <div class="optrow"><span>Assist mode</span><span></span><div class="tog" id="optAssist">Off</div></div>
+      <div class="sub" style="text-transform:none;letter-spacing:.02em;max-width:400px;line-height:1.6;color:var(--dim)">
+        Assist mode triples the rewind buffer and shrinks your hazard hitbox. It never changes a sector's loadout,
+        so every puzzle still solves the same way.</div>
+      <div class="sub" id="saveState" style="text-transform:none;letter-spacing:.02em"></div>
+      <div class="row">
+        <button id="btnOptBack">Back</button>
+        <button id="btnTele" class="ghost">Export playtest data</button>
+        <button id="btnWipe" class="ghost" style="color:var(--oxide);border-color:var(--oxide)">Erase progress</button>
+      </div>
+    </div>
+
+    <div class="screen" id="scrEnd">
+      <h1 class="title" style="font-size:clamp(20px,4vw,32px)">SALVAGE COMPLETE</h1>
+      <div class="statgrid">
+        <span>Sectors cleared</span><b id="endSec">0 / 24</b>
+        <span>Data cores</span><b id="endCore">0 / 24</b>
+        <span>Run time</span><b id="endTime">0:00</b>
+        <span>Losses</span><b id="endDeaths">0</b>
+      </div>
+      <div class="sub" id="endRank" style="color:var(--amber)"></div>
+      <div class="row">
+        <button id="btnAgain">Run it again</button>
+        <button id="btnEndSel" class="ghost">Sectors</button>
+      </div>
+    </div>
+  </div>
+  <div id="below">Rewind restores you and loose cargo · latched switches, phase state, anchored cargo and spent plating stay as they are</div>
+</div>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

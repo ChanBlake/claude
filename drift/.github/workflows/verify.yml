@@ -1,0 +1,19 @@
+name: verify sectors
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      # No install step: the verifier is dependency-free by design, so a broken
+      # sector fails the build in seconds rather than reaching a player.
+      - name: Sectors are solvable
+        run: node tools/verify.mjs
+      # levels.js is generated. If it doesn't match what the chambers produce,
+      # someone hand-edited geometry and the verification above proved nothing.
+      - name: Generated levels are current
+        run: |
+          python3 tools/compose.py
+          git diff --exit-code src/levels.js
