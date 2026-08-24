@@ -47,7 +47,7 @@ instantly in motion and are what makes the game look unlike other puzzle platfor
 ### 3. Steamworks SDK — optional
 
 The game needs none of it to ship. Add `steamworks.js` only if you want achievements,
-Steam Cloud, or the overlay. Natural achievements here: clear a zone, recover all 24 data
+Steam Cloud, or the overlay. Natural achievements here: clear a zone, recover all 54 data
 cores, beat par on every sector, clear a sector without dying.
 
 Cloud config, if you add it:
@@ -76,7 +76,7 @@ makes shipping an unsolvable level structurally difficult.
 
 What a paid release would still want:
 
-- **More content.** 24 sectors is roughly 60–90 minutes. That's short for paid; it's
+- **More content.** 30 sectors is roughly 75–110 minutes. That's short for paid; it's
   well-judged for free or a demo. The editor and verifier exist precisely so adding
   sectors 25–60 is a design problem rather than an engineering one.
 - **A reason to replay.** Par times and data cores are in. Speedrun timers, a ghost of

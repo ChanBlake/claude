@@ -110,9 +110,26 @@
   .optrow b{color:var(--bone);font-weight:400;min-width:74px;text-align:right}
   input[type=range]{flex:1;accent-color:var(--teal);background:transparent}
   .tog{cursor:pointer;border:1px solid var(--hull-lit);color:var(--dim);padding:3px 10px;font-size:10px;letter-spacing:.14em}
+  .tog:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
   .tog.on{color:var(--teal);border-color:var(--teal)}
   .statgrid{display:grid;grid-template-columns:auto auto;gap:4px 22px;font-size:12px;color:var(--dim);letter-spacing:.1em}
   .statgrid b{color:var(--bone);font-weight:400;text-align:right}
+  #endZones{margin-top:2px;font-size:10px;opacity:.85}
+  #endZones b.full{color:var(--amber)}
+
+  /* The zone header now carries its own tally, so it needs two ends. */
+  .zhead{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+  .ztally{color:var(--hull-lit);letter-spacing:.12em}
+
+  /* A pad has no hover and gets no :focus-visible from a script .focus(), so the
+     selection ring has to be explicit whenever a controller is driving. */
+  /* A pad and a keyboard legend stacked is just a longer title screen; once a
+     controller is present it is the one you are going to use, so swap. */
+  #padHint{display:none}
+  #padHint.show{display:grid}
+  body.pad #keyHint{display:none}
+  body.pad button:focus,body.pad .lvlBtn:focus,body.pad .tog:focus,body.pad input[type=range]:focus{
+    outline:2px solid var(--amber);outline-offset:2px}
 
   #touch{position:absolute;inset:0;display:none;pointer-events:none}
   #touch.on{display:block}

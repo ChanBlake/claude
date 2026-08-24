@@ -44,7 +44,7 @@ file on disk.
 node tools/verify.mjs
 ```
 
-No install needed. It proves all 24 sectors are reachable, that cargo can be pushed onto
+No install needed. It proves all 30 sectors are reachable, that cargo can be pushed onto
 its plate, that no sector issues an ability it doesn't need, and that the structure is
 sound. Exit code is non-zero if anything is broken, so it works as a pre-commit hook or
 in CI.

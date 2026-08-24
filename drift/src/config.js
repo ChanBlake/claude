@@ -1,6 +1,6 @@
 /* DRIFT — tuning. Every number the verifier depends on lives here.
    tools/verify.mjs re-derives the jump envelope from these, so changing
-   JUMP or GRAV automatically re-checks all 24 sectors against the new reach. */
+   JUMP or GRAV automatically re-checks all 30 sectors against the new reach. */
 
 export const TILE=32;
 /* The VIEWPORT is a fixed 25x15 tiles. Level grids are no longer tied to it —

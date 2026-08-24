@@ -12,6 +12,17 @@ import {S,setDrone,setPaused} from "./audio.js";
 
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+/* How many cores each sector actually holds, and how many exist in total.
+   The progress readouts used to divide by LEVELS.length, which counted *sectors
+   fully looted* while calling them cores — with Zone V holding one core a sector
+   and everywhere else holding two, that read 30 when the real number is 54. */
+const CORES_IN  = LEVELS.map(L => L.rows.reduce((k,r)=>k+(r.split("o").length-1), 0));
+const CORES_ALL = CORES_IN.reduce((a,b)=>a+b, 0);
+/* A sector only enters save.cores when every core in it is recovered, so summing
+   its capacity over that set is an exact count, not an estimate. */
+const coresFound = () => [...coreSet()].reduce((k,i)=>k+(CORES_IN[i]||0), 0);
+const zoneRange = zi => [ZONES[zi].at, zi+1<ZONES.length ? ZONES[zi+1].at : LEVELS.length];
+
 export function boot(){
   /* ══════════════ STATE ══════════════ */
   const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
@@ -39,8 +50,8 @@ export function boot(){
   const BUFFER=()=> save.assist? BASE_BUFFER*ASSIST_BUFFER : BASE_BUFFER;
 
   const keys=Object.create(null);
-  const K={left:["KeyA","ArrowLeft","tL"],right:["KeyD","ArrowRight","tR"],
-           up:["KeyW","ArrowUp"],down:["KeyS","ArrowDown","tD"]};
+  const K={left:["KeyA","ArrowLeft","tL","gL"],right:["KeyD","ArrowRight","tR","gR"],
+           up:["KeyW","ArrowUp","gU"],down:["KeyS","ArrowDown","tD","gD"]};
   const held=s=>s.some(k=>keys[k]);
   let stars=[];
   function seedStars(n,count){
@@ -79,6 +90,9 @@ export function boot(){
     history=[];rewinding=false;dead=0;won=0;deaths=0;shake=0;idleT=0;denyT=0;
     cam.x=cam.tx=clampCamX(player.x-W/2); cam.y=cam.ty=clampCamY(player.y-H/2);
     gotCore=false; coresGot=0; coresTotal=cores.length; lvlStart=performance.now(); lvlMs=0;
+    /* Loading a sector from a menu means the pause is already running; re-anchor
+       it here so show() credits back only the wait that belongs to this sector. */
+    if(paused) pauseAt=lvlStart;
     seedStars(i+3, TH.starCount);
     const z=zoneOf(i);
     document.getElementById("lvlNum").textContent=String(i+1).padStart(2,"0");
@@ -463,8 +477,9 @@ export function boot(){
     if(won){ won++; if(won>26) nextLevel(); return; }
     if(dead){ dead++; if(dead>28) loadLevel(lvl); return; }
 
-    if(keys.KeyR && !kit.rewind) deny("rewind");
-    if(kit.rewind && keys.KeyR && history.length>1){
+    const rw=keys.KeyR||keys.gRW;
+    if(rw && !kit.rewind) deny("rewind");
+    if(kit.rewind && rw && history.length>1){
       rewinding=true;
       for(let i=0;i<REWIND_SPEED;i++) if(history.length>1) unsnap();
       if(tick%9===0) S.tickr();
@@ -849,7 +864,15 @@ export function boot(){
   /* ══════════════ SCREENS ══════════════ */
   const el=id=>document.getElementById(id);
   const scr={title:el("scrTitle"),card:el("scrCard"),menu:el("scrMenu"),opt:el("scrOpt"),end:el("scrEnd")};
+  let pauseAt=0;                  // when the current pause began; 0 while playing
+  /* lvlStart and runStart are wall-clock anchors, and update() skips the frames
+     where a screen is up — so every second spent reading a sector card or sitting
+     in the pause menu was still billed to your clear time, and to your best. Roll
+     the anchors forward by however long the game was actually stopped. */
   function show(s){
+    const now=performance.now();
+    if(s && !paused) pauseAt=now;
+    else if(!s && paused && pauseAt){ const d=now-pauseAt; lvlStart+=d; runStart+=d; pauseAt=0; }
     Object.values(scr).forEach(x=>x.classList.remove("show"));
     if(s)s.classList.add("show");
     paused=!!s; setPaused(paused);
@@ -871,18 +894,42 @@ export function boot(){
   }
   function titleProgress(){
     el("titleProg").textContent=save.cleared.length+" / "+LEVELS.length+" sectors · "+
-      save.cores.length+" / "+LEVELS.length+" cores";
+      coresFound()+" / "+CORES_ALL+" cores";
     el("btnCont").style.display=save.cleared.length?"":"none";
   }
+  /* Cores used to be a number that went up and did nothing else — 54 collectibles
+     whose only reward was completionism. A rank ladder is the cheapest thing that
+     makes recovering them mean something, and the per-zone tally answers the
+     question a completionist actually has: which zone still owes me. */
+  const RANKS=[
+    [1,   "FULL SALVAGE",   "Every core recovered. Nothing left aboard."],
+    [.75, "SALVAGE LEAD",   null],
+    [.5,  "SALVAGE CREW",   null],
+    [0,   "STATION CLEARED",null],
+  ];
   function endRun(){
+    const found=coresFound(), left=CORES_ALL-found;
+    const full=save.cleared.length===LEVELS.length;
     el("endSec").textContent=save.cleared.length+" / "+LEVELS.length;
-    el("endCore").textContent=save.cores.length+" / "+LEVELS.length;
+    el("endCore").textContent=found+" / "+CORES_ALL;
     el("endTime").textContent=fmt((performance.now()-runStart)/1000);
     el("endDeaths").textContent=runDeaths;
-    const full=save.cleared.length===LEVELS.length, allc=save.cores.length===LEVELS.length;
-    el("endRank").textContent = allc? "Full salvage — every core recovered"
-      : full? "Station cleared. "+(LEVELS.length-save.cores.length)+" cores still out there."
-      : "Run ended.";
+    if(full){
+      const [,rank,note]=RANKS.find(r=>found/CORES_ALL>=r[0]);
+      el("endRank").textContent=rank;
+      el("endNote").textContent=note || (left+" core"+(left===1?"":"s")+" still out there.");
+    }else{
+      const un=LEVELS.length-save.cleared.length;
+      el("endRank").textContent="RUN ENDED";
+      el("endNote").textContent=un+" sector"+(un===1?"":"s")+" still sealed.";
+    }
+    const cl=clearedSet(), cs=coreSet();
+    el("endZones").innerHTML=ZONES.map((z,zi)=>{
+      const [a,b]=zoneRange(zi); let sc=0,cc=0,ct=0;
+      for(let i=a;i<b;i++){ if(cl.has(i)) sc++; ct+=CORES_IN[i]; if(cs.has(i)) cc+=CORES_IN[i]; }
+      return "<span>"+z.name+"</span><b"+(cc===ct&&sc===b-a?" class=\"full\"":"")+
+             ">"+sc+"/"+(b-a)+" &nbsp;◆ "+cc+"/"+ct+"</b>";
+    }).join("");
     show(scr.end);
   }
   function buildMenu(){
@@ -891,7 +938,14 @@ export function boot(){
     let zi=-1;
     LEVELS.forEach((L,i)=>{
       const z=ZONES.indexOf(zoneOf(i));
-      if(z!==zi){ zi=z; const h=document.createElement("div"); h.className="zhead"; h.textContent=ZONES[z].name; g.appendChild(h); }
+      if(z!==zi){
+        zi=z; const h=document.createElement("div"); h.className="zhead";
+        const [a,b]=zoneRange(z); let sc=0,cc=0,ct=0;
+        for(let j=a;j<b;j++){ if(cl.has(j)) sc++; ct+=CORES_IN[j]; if(cs.has(j)) cc+=CORES_IN[j]; }
+        h.innerHTML="<span>"+ZONES[z].name+"</span>"+
+          "<span class=\"ztally\">"+sc+"/"+(b-a)+" &nbsp;◆ "+cc+"/"+ct+"</span>";
+        g.appendChild(h);
+      }
       const b=document.createElement("button");
       b.className="lvlBtn"+(cl.has(i)?" done":"");
       const k=L.kit||"";
@@ -904,6 +958,14 @@ export function boot(){
     });
   }
   const refreshDrone=()=>setDrone(themeFor(ZONES.indexOf(zoneOf(lvl))).drone);
+  const isFull=()=>!!(document.fullscreenElement||document.webkitFullscreenElement);
+  function toggleFull(){
+    const root=document.documentElement;
+    const go = isFull()
+      ? (document.exitFullscreen||document.webkitExitFullscreen||(()=>{})).call(document)
+      : (root.requestFullscreen||root.webkitRequestFullscreen||(()=>{})).call(root);
+    if(go && go.catch) go.catch(()=>{});   // denied without a gesture; not worth surfacing
+  }
   function applyOpts(){
     const s=el("saveState");
     if(s){ s.textContent=backendLabel();
@@ -917,6 +979,8 @@ export function boot(){
     el("optShake").textContent=save.shake?"On":"Off";
     el("optAssist").classList.toggle("on",!!save.assist);
     el("optAssist").textContent=save.assist?"On":"Off";
+    el("optFull").classList.toggle("on",isFull());
+    el("optFull").textContent=isFull()?"On":"Off";
   }
   function startRun(from){
     runMode=true; runStart=performance.now(); runDeaths=0;
@@ -951,6 +1015,12 @@ export function boot(){
     if(e.code==="Space"&&player&&!player.zg&&player.vy*player.gd<-CUT) player.vy=-CUT*player.gd;
   });
   addEventListener("blur",()=>{for(const k in keys)keys[k]=false;});
+  /* Switching tabs used to leave the sector clock running and the zone drone
+     humming under whatever you switched to. Stop for real, and let show() credit
+     the time back. The title screen is already stopped, so leave it alone. */
+  document.addEventListener("visibilitychange",()=>{
+    if(document.hidden && !paused && !scr.title.classList.contains("show")) show(scr.menu);
+  });
 
   el("btnStart").addEventListener("click",()=>startRun(0));
   el("btnCont").addEventListener("click",()=>startRun(save.last||0));
@@ -969,6 +1039,14 @@ export function boot(){
 el("optAmb").addEventListener("input",e=>{save.amb=e.target.value/100;applyOpts();refreshDrone();saveNow();});
   el("optShake").addEventListener("click",()=>{save.shake=save.shake?0:1;applyOpts();saveNow();});
   el("optAssist").addEventListener("click",()=>{save.assist=save.assist?0:1;applyOpts();saveNow();});
+  el("optFull").addEventListener("click",toggleFull);
+  document.addEventListener("fullscreenchange",applyOpts);
+  /* The toggles are divs so they can sit in the options grid, which means they
+     get none of a button's keyboard behaviour for free. Give it back rather than
+     leaving a control only a mouse or a pad can reach. */
+  document.querySelectorAll(".tog").forEach(t=>t.addEventListener("keydown",e=>{
+    if(e.code==="Enter"||e.code==="Space"){ e.preventDefault(); t.click(); }
+  }));
   el("btnTele").addEventListener("click",async()=>{
   const blob=JSON.stringify({v:1,when:Date.now(),tele:save.tele,
     best:save.best,cleared:save.cleared,cores:save.cores});
@@ -1011,6 +1089,110 @@ el("btnWipe").addEventListener("click",()=>{
     el("scrCard").addEventListener("touchstart",()=>{if(scr.card.classList.contains("show"))show(null);});
   }
 
+
+  /* ══════════════ GAMEPAD ══════════════
+     A platformer you cannot play on a controller reads as a prototype, and this
+     was the largest gap between DRIFT and something you would put in front of a
+     Steam user. The Gamepad API has no events for button state, so this polls
+     once a frame and writes the same virtual keys the touch overlay already
+     uses — the physics, the HUD and the deny logic never learn a pad exists.
+
+     Menus need their own pass because there is no focus model to inherit: a
+     canvas game has nothing the browser would tab through on its own. */
+  const PAD={on:false, prev:{}, rep:0, held:false};
+  const DEADZONE=.35, REPEAT_FIRST=16, REPEAT_NEXT=6;
+  const down=(gp,i)=>{ const b=gp.buttons[i]; return !!b && (b.pressed || b.value>.5); };
+  function firstPad(){
+    const list = navigator.getGamepads ? navigator.getGamepads() : [];
+    for(const g of list) if(g && g.connected) return g;
+    return null;
+  }
+  function padClear(){ keys.gL=keys.gR=keys.gU=keys.gD=keys.gRW=false; }
+  function padUI(on){
+    document.body.classList.toggle("pad",on);
+    el("padHint").classList.toggle("show",on);
+  }
+  function padPoll(){
+    const gp=firstPad();
+    if(!gp){ if(PAD.on){ PAD.on=false; PAD.prev={}; padClear(); padUI(false); } return; }
+    if(!PAD.on){ PAD.on=true; padUI(true); }
+
+    const ax=gp.axes[0]||0, ay=gp.axes[1]||0;
+    const now={
+      L: ax<-DEADZONE||down(gp,14),  R: ax>DEADZONE||down(gp,15),
+      U: ay<-DEADZONE||down(gp,12),  D: ay>DEADZONE||down(gp,13),
+      A: down(gp,0), B: down(gp,1), X: down(gp,2), Y: down(gp,3),
+      RW: down(gp,4)||down(gp,5)||down(gp,6)||down(gp,7),
+      ST: down(gp,9)||down(gp,8),
+    };
+    const hit=k=>now[k]&&!PAD.prev[k];
+    if(Object.values(scr).some(x=>x.classList.contains("show"))) padMenu(now,hit);
+    else padPlay(now,hit);
+    PAD.prev=now;
+  }
+  function padPlay(now,hit){
+    keys.gL=now.L; keys.gR=now.R; keys.gU=now.U; keys.gD=now.D; keys.gRW=now.RW;
+    if(hit("A")) doJump();
+    /* Releasing A cuts the jump short exactly as releasing SPACE does — variable
+       jump height is half the forgiveness in the input model and a pad that
+       can't do it plays like a different game. */
+    if(!now.A && PAD.prev.A && player && !player.zg && player.vy*player.gd<-CUT)
+      player.vy=-CUT*player.gd;
+    if(hit("X")||hit("B")) doFlip();
+    if(hit("Y")) resetSector();
+    if(hit("ST")) show(scr.menu);
+  }
+  const padItems=()=>{
+    const s=Object.values(scr).find(x=>x.classList.contains("show"));
+    return s ? [...s.querySelectorAll("button,.tog,input[type=range]")].filter(e=>e.offsetParent) : [];
+  };
+  function padFocus(dir){
+    const items=padItems(); if(!items.length) return;
+    let i=items.indexOf(document.activeElement);
+    i = i<0 ? (dir>0?0:items.length-1) : (i+dir+items.length)%items.length;
+    items[i].focus();
+    if(items[i].scrollIntoView) items[i].scrollIntoView({block:"nearest"});
+  }
+  function padBack(){
+    if(scr.opt.classList.contains("show")) show(scr.menu);
+    else if(scr.menu.classList.contains("show")) show(null);
+    else if(scr.title.classList.contains("show")||scr.end.classList.contains("show")) return;
+    else show(scr.menu);
+  }
+  function padMenu(now,hit){
+    padClear();
+    /* The card says "press any key"; on a pad that has to mean any button. */
+    if(scr.card.classList.contains("show")){
+      if(hit("A")||hit("B")||hit("X")||hit("Y")||hit("ST")) show(null);
+      return;
+    }
+    const items=padItems();
+    const focused=items.indexOf(document.activeElement)>=0;
+    const any=now.U||now.D||now.L||now.R;
+    if(items.length && !focused && (any||hit("A"))){ items[0].focus(); PAD.rep=REPEAT_FIRST; return; }
+
+    const f=document.activeElement;
+    const slider=f && f.tagName==="INPUT" && f.type==="range";
+    const hdir=now.R?1:now.L?-1:0, vdir=now.D?1:now.U?-1:0;
+    /* On a slider, left/right belongs to the value and up/down to the list —
+       anything else makes volume impossible to set without a mouse. */
+    const move=(slider&&hdir) ? 0 : (vdir||hdir);
+    const slide=(slider&&hdir) ? hdir : 0;
+    if(move||slide){
+      if(PAD.rep<=0){
+        if(slide){ f.value=+f.value + slide*(+f.step||1); f.dispatchEvent(new Event("input",{bubbles:true})); }
+        else padFocus(move);
+        PAD.rep = PAD.held ? REPEAT_NEXT : REPEAT_FIRST; PAD.held=true;
+      }
+      PAD.rep--;
+    } else { PAD.rep=0; PAD.held=false; }
+
+    if(hit("A") && f && typeof f.click==="function") f.click();
+    if(hit("B")||hit("ST")) padBack();
+  }
+  addEventListener("gamepadconnected",()=>padUI(true));
+  addEventListener("gamepaddisconnected",()=>{ if(!firstPad()){ PAD.on=false; padClear(); padUI(false); } });
+
   /* ══════════════ MAIN ══════════════ */
   buildMenu(); titleProgress(); applyOpts();
   loadSave();
@@ -1018,6 +1200,7 @@ el("btnWipe").addEventListener("click",()=>{
   let acc=0,last=performance.now();
   function loop(now){
     const dt=Math.min(now-last,100); last=now; acc+=dt;
+    padPoll();
     let guard=0;
     while(acc>=1000/60 && guard++<4){ update(); acc-=1000/60; }
     if(acc>1000/60) acc=0;

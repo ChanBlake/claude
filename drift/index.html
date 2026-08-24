@@ -43,13 +43,19 @@
       <h1 class="title">DRIFT</h1>
       <div class="sub">Station Salvage</div>
       <div class="sub" id="titleProg" style="color:var(--teal)"></div>
-      <div class="keys">
+      <div class="keys" id="keyHint">
         <span><b>A / D</b></span><span>walk &nbsp;·&nbsp; <b>S</b> drop through plating</span>
         <span><b>SPACE</b></span><span>jump — tap again mid-air for the suit burst</span>
         <span><b>F</b></span><span>invert gravity</span>
         <span><b>R</b> (hold)</span><span>rewind time</span>
         <span><b>W A S D</b></span><span>thrust, inside null fields</span>
         <span><b>K</b> · <b>ESC</b></span><span>restart sector · pause</span>
+      </div>
+      <div class="keys" id="padHint">
+        <span><b>A</b></span><span>jump — hold for height, tap again for the burst</span>
+        <span><b>X</b> · <b>B</b></span><span>invert gravity</span>
+        <span><b>LB</b> / <b>RB</b></span><span>rewind time</span>
+        <span><b>Y</b> · <b>START</b></span><span>restart sector · pause</span>
       </div>
       <div class="sub" style="color:var(--amber);letter-spacing:.08em;text-transform:none">
         Each sector issues its own loadout. Locked gear stays locked.</div>
@@ -86,8 +92,9 @@
       <div class="sub">Settings</div>
       <div class="optrow"><span>Volume</span><input type="range" id="optVol" min="0" max="100" step="5"><b id="volVal">100%</b></div>
       <div class="optrow"><span>Ambience</span><input type="range" id="optAmb" min="0" max="100" step="5"><b id="ambVal">35%</b></div>
-      <div class="optrow"><span>Screen shake</span><span></span><div class="tog on" id="optShake">On</div></div>
-      <div class="optrow"><span>Assist mode</span><span></span><div class="tog" id="optAssist">Off</div></div>
+      <div class="optrow"><span>Screen shake</span><span></span><div class="tog on" id="optShake" tabindex="0">On</div></div>
+      <div class="optrow"><span>Assist mode</span><span></span><div class="tog" id="optAssist" tabindex="0">Off</div></div>
+      <div class="optrow"><span>Fullscreen</span><span></span><div class="tog" id="optFull" tabindex="0">Off</div></div>
       <div class="sub" style="text-transform:none;letter-spacing:.02em;max-width:400px;line-height:1.6;color:var(--dim)">
         Assist mode triples the rewind buffer and shrinks your hazard hitbox. It never changes a sector's loadout,
         so every puzzle still solves the same way.</div>
@@ -102,12 +109,14 @@
     <div class="screen" id="scrEnd">
       <h1 class="title" style="font-size:clamp(20px,4vw,32px)">SALVAGE COMPLETE</h1>
       <div class="statgrid">
-        <span>Sectors cleared</span><b id="endSec">0 / 24</b>
-        <span>Data cores</span><b id="endCore">0 / 24</b>
+        <span>Sectors cleared</span><b id="endSec">0 / 30</b>
+        <span>Data cores</span><b id="endCore">0 / 54</b>
         <span>Run time</span><b id="endTime">0:00</b>
         <span>Losses</span><b id="endDeaths">0</b>
       </div>
-      <div class="sub" id="endRank" style="color:var(--amber)"></div>
+      <div class="sub" id="endRank" style="color:var(--amber);font-size:15px;letter-spacing:.3em"></div>
+      <div class="sub" id="endNote" style="text-transform:none;letter-spacing:.04em"></div>
+      <div class="statgrid" id="endZones"></div>
       <div class="row">
         <button id="btnAgain">Run it again</button>
         <button id="btnEndSel" class="ghost">Sectors</button>

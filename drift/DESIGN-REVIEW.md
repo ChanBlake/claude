@@ -1,5 +1,14 @@
 # DRIFT — where it actually stands
 
+> **Status note.** This review was written against the 24-sector build and its
+> recommendations have been worked through since. Items 3 (zone identities), 4
+> (controller support) and 5 (make cores mean something) are **done** — see the
+> Controls and Data cores sections of the README. Item 1 (cut the padded third
+> stages) is **still open and still the biggest one**: it is a judgement call about
+> which stages earn their length, and the heatmap in item 2 is how you answer it.
+> Everything below is left as originally written, because the reasoning is the
+> useful part.
+
 You asked how to make this better. Here's my honest read, in the order I'd do it.
 
 ## The headline

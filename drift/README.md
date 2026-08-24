@@ -2,7 +2,7 @@
 
 A sci-fi puzzle platformer about rewinding time, inverting gravity, and decisions you
 cannot walk back. 30 scrolling sectors across five themed zones, three stages each —
-roughly 87 screens of level, with 60 data cores to find.
+roughly 87 screens of level, with 54 data cores to find.
 No engine, no build step, no assets: the whole game is ES modules, a canvas, and
 procedural audio.
 
@@ -10,7 +10,7 @@ procedural audio.
 
 ```bash
 node serve.mjs           # play at localhost:5173 — no install, no network
-node tools/verify.mjs    # prove all 24 sectors are solvable
+node tools/verify.mjs    # prove all 30 sectors are solvable
 ```
 
 Both are dependency-free; Node 18+ is the only requirement. ES modules cannot load over
@@ -25,6 +25,27 @@ npm install && npm run app
 
 `PLAYING.md` covers the three ways to run it and which to pick; `QUICKSTART.md` has a
 suggested test pass and troubleshooting.
+
+## Controls
+
+| | Keyboard | Controller |
+|---|---|---|
+| Walk | `A` / `D` | left stick · d-pad |
+| Jump / burst | `SPACE` | `A` |
+| Invert gravity | `F` | `X` or `B` |
+| Rewind (hold) | `R` | any shoulder or trigger |
+| Drop through plating | `S` | stick down · d-pad down |
+| Thrust in null fields | `WASD` | left stick |
+| Restart sector | `K` | `Y` |
+| Pause | `ESC` | `START` |
+
+Controllers are polled through the Gamepad API and write the same virtual keys the
+touch overlay uses, so the physics, HUD and lockout logic never learn a pad exists —
+including the release-to-cut-your-jump behaviour, which is half the forgiveness in the
+input model. Menus get their own handling because a canvas game has no focus model to
+inherit: the stick walks the selection, `A` activates, `B` backs out, and on a slider
+left/right moves the value instead of the selection. Plug a pad in and the title screen
+swaps its key legend for the controller one.
 
 ## The design rule
 
@@ -69,11 +90,22 @@ rewind buffer*, replaying your recorded path forwards. That makes you the second
 which is the answer to "two plates and one of you." New mechanics should deepen the spine
 rather than sit next to it, and this is what that looks like.
 
+The sector clock stops when the game does. Time spent reading a sector card or sitting in
+the pause menu is credited back rather than billed to your clear time, so a best time
+means what it says. Tabbing away pauses for real — the clock and the zone drone both
+stop rather than running under whatever you switched to.
+
 **Data cores** are optional, two per sector, and a sector only counts as 100% when both
 are recovered. Half are hidden behind false walls; the rest sit at the reachable tile
 furthest from the route between spawn and airlock — a deliberate detour rather than
 something you pass through. Every core is proven reachable by the verifier, which is what
 lets them be hidden well without ever being unfair.
+
+Recovering them pays out rather than just incrementing a number: finishing the station
+ranks the run — *Station Cleared*, *Salvage Crew*, *Salvage Lead*, *Full Salvage* — on the
+share of the 54 cores you brought back. The end screen and the sector list both break the
+count down per zone, so a completionist can see which zone still owes them instead of
+re-walking all thirty sectors to find out.
 
 The rewind asymmetry is the core idea: get somewhere you cannot return from, change the
 world there, then rewind *yourself* out while the change stays.
@@ -116,7 +148,7 @@ python3 tools/compose.py && node tools/verify.mjs && node tools/bundle.mjs
 ```
 
 `config.js` is the single source of tuning truth. Change `JUMP` and the verifier
-re-derives the reach and re-checks all 24 sectors against the new envelope — a retune
+re-derives the reach and re-checks all 30 sectors against the new envelope — a retune
 cannot silently invalidate a sector built against the old one.
 
 ## Playtesting
@@ -211,7 +243,9 @@ store checklist.
 
 ## Accessibility
 
-Respects `prefers-reduced-motion`. Screen shake can be disabled. The zone drone has its
+Full controller support, and every menu is reachable from the pad alone. Fullscreen is
+in Settings. The option toggles are keyboard-operable rather than mouse-only. Respects
+`prefers-reduced-motion`. Screen shake can be disabled. The zone drone has its
 own level, separate from the sound effects, and can be turned fully off — low-frequency
 ambience is felt as much as heard, so it accumulates over a session in a way that doesn't
 register as "loud"; it should never be something you have to mute the whole game to escape. Assist mode triples the
