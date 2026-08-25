@@ -1,0 +1,2691 @@
+<title>Pixel Bowl</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* ------------------------------------------------------------------
+   Pixel Bowl — the shell.
+   One committed visual world: a handheld screen under stadium lights.
+   No theme switching; every colour is painted explicitly so the page
+   holds on any host background.
+   ------------------------------------------------------------------ */
+:root {
+  --night:  #0E141A;   /* the sky above the floodlights */
+  --night2: #141C24;
+  --panel:  #1A242E;
+  --edge:   #2B3A47;
+  --turf:   #2E6B3A;
+  --chalk:  #E8EFE4;
+  --flood:  #F5C542;   /* sodium vapour — the one bold colour */
+  --ink:    #E6EDF2;
+  --dim:    #8296A3;
+  --display: "Oswald", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--night);
+  color: var(--ink);
+  font-family: var(--display);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+#shell {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(120% 70% at 50% -10%, #1C2A36 0%, transparent 60%),
+    var(--night);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#screen {
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  touch-action: none;
+  background: #000;
+  /* A phone-shaped play surface on desktop, full bleed on a phone. */
+  box-shadow: 0 0 0 1px var(--edge), 0 24px 60px -20px rgba(0,0,0,.9);
+}
+
+/* Boot / first-tap gate. iOS will not start audio without a gesture, so the
+   game asks for one instead of failing silently the first time it needs a
+   whistle. */
+#boot {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 18px;
+  padding: 32px;
+  text-align: center;
+  background: var(--night);
+  z-index: 10;
+  transition: opacity .35s ease;
+}
+#boot.gone { opacity: 0; pointer-events: none; }
+
+#boot h1 {
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: clamp(2.4rem, 13vw, 4rem);
+  line-height: .92;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--chalk);
+  text-wrap: balance;
+}
+#boot h1 span { display: block; color: var(--flood); }
+
+#boot p {
+  margin: 0;
+  max-width: 30ch;
+  font-family: var(--mono);
+  font-size: .78rem;
+  line-height: 1.7;
+  color: var(--dim);
+}
+
+#start {
+  appearance: none;
+  border: 2px solid var(--flood);
+  background: var(--flood);
+  color: #16202A;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 1.05rem;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  padding: 14px 40px;
+  cursor: pointer;
+  transition: transform .12s ease, background .12s ease;
+}
+#start:hover { transform: translateY(-2px); }
+#start:active { transform: translateY(1px); }
+#start:focus-visible { outline: 3px solid var(--chalk); outline-offset: 3px; }
+
+#hint {
+  font-family: var(--mono);
+  font-size: .68rem;
+  line-height: 1.7;
+  color: #5D707D;
+  max-width: 34ch;
+}
+#hint b { color: var(--dim); font-weight: 600; }
+
+@media (prefers-reduced-motion: reduce) {
+  #boot, #start { transition: none; }
+}
+</style>
+<div id="shell">
+  <canvas id="screen"></canvas>
+</div>
+
+<div id="boot">
+  <h1>Pixel<span>Bowl</span></h1>
+  <p>Four downs, one thumb. You play offense — drag to aim, release to throw, swipe to run.</p>
+  <button id="start" type="button">Kick Off</button>
+  <div id="hint">
+    On iPhone: tap <b>Share</b> → <b>Add to Home Screen</b> for full-screen play.
+  </div>
+</div>
+<script>
+"use strict";
+
+/* ===================================================================
+   CONFIG — every number that decides how the game feels.
+   Nothing below hard-codes a speed, a radius or a probability.
+   =================================================================== */
+const CFG = {
+  // Field, in yards. Narrowed from regulation: on a portrait phone a
+  // 53-yard-wide field puts both sidelines off screen and the play stops
+  // reading. You always attack UP the screen, so nothing ever mirrors.
+  fieldW: 30,
+  fieldL: 120,
+  endZone: 10,
+
+  // Rendering. `artW` is the target width of the screen in art pixels; the
+  // real value is snapped so one art pixel is a whole number of device
+  // pixels, which is what keeps the sprites crisp instead of shimmering.
+  artW: 176,
+
+  // Movement, yards per second.
+  speedMin: 4.0, speedMax: 9.4,
+  accelMin: 12, accelMax: 26,
+  turnMin: 5, turnMax: 12,
+  sprintMul: 1.14,
+
+  // Contact.
+  tackleR: 1.15,
+  // A blocked defender reaches less far and wins less often, but he is not a
+  // traffic cone.
+  blockedReach: 0.8,
+  blockedTackle: 0.55,
+  tackleBase: 0.52,
+  tackleRating: 0.0055,
+  breakSlow: 0.55, breakSlowTime: 0.35,
+  stumbleTime: 0.7,
+  maxBreaks: 3,
+  goalLineSurge: 0.26,
+  fumbleBase: 0.018,
+
+  // Blocking.
+  engageR: 1.1,
+  disengageR: 2.1,
+  engagedSpeed: 0.12,
+  shedRate: 0.42,
+  shedRating: 0.011,
+  shedImmune: 0.5,
+
+  // Passing. The ball is thrown at a POINT you choose, not at a receiver —
+  // leading the throw is the skill, and it is what makes one thumb enough.
+  passSpeed: 19,
+  passArc: 0.16, passArcMax: 5,
+  catchR: 1.7,
+  catchBase: 0.90,
+  catchRating: 0.004,
+  pickShare: 0.15,
+  scatterBase: 1.4,
+  scatterPressure: 2.4,
+  pressureR: 2.0,
+  throwWind: 0.16,
+  maxThrow: 60,          // yards, cursor reach from the quarterback
+  carrierAvoid: 6,       // yards a runner "feels" traffic inside
+
+  // Kicking.
+  kickRangeMin: 36, kickRangeMax: 60,
+  kickWindMax: 2.2,
+
+  // Clock. Live play burns game time faster than real time so a short
+  // quarter still contains a real quarter's worth of snaps.
+  clockSpeed: 2.0,
+  huddle: 7,
+  // Clock burned per simulated defensive play. Matched to what one of your own
+  // snaps costs (play time x clockSpeed, plus the huddle) so neither side eats
+  // the quarter faster than the other.
+  // Their drive is an abstraction, not a series of snaps you sit through, so
+  // it costs a proportionate share of the quarter rather than real-football
+  // seconds. Otherwise one opponent drive eats a whole quarter.
+  simPlaySeconds: 8,
+  maxPlay: 16,           // hard whistle, seconds
+
+  // Feel.
+  deadBall: 1.5,
+  aimGain: 1.7,          // finger travel → cursor travel
+  reachAhead: 13,        // yards downfield the cursor starts at
+};
+
+const FIELD = {
+  W: CFG.fieldW,
+  L: CFG.fieldL,
+  EZ: CFG.endZone,
+  ownGoal: CFG.endZone,               // y = 10
+  oppGoal: CFG.fieldL - CFG.endZone,  // y = 110
+  midY: CFG.fieldW / 2,
+};
+
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+
+/* ===================================================================
+   RNG — seeded SplitMix64-ish on 32 bits. Reproducible, which is what
+   makes a bug reportable: the seed is printed on the results screen.
+   =================================================================== */
+function makeRNG(seed) {
+  let s = (seed >>> 0) || 1;
+  const next = () => {
+    s = (s + 0x9E3779B9) >>> 0;
+    let z = s;
+    z = Math.imul(z ^ (z >>> 16), 0x21F0AAAD) >>> 0;
+    z = Math.imul(z ^ (z >>> 15), 0x735A2D97) >>> 0;
+    return (z ^ (z >>> 15)) >>> 0;
+  };
+  const unit = () => next() / 4294967296;
+  return {
+    next, unit,
+    range: (a, b) => a + unit() * (b - a),
+    int: (a, b) => a + Math.floor(unit() * (b - a + 1)),
+    chance: p => unit() < p,
+    bell: () => (unit() + unit() + unit() - 1.5) * 2,
+    pick: arr => arr[Math.floor(unit() * arr.length)],
+  };
+}
+let RNG = makeRNG(Date.now() & 0xffffffff);
+
+/* ===================================================================
+   TEAMS — eight invented clubs. Real cities, fictional teams; no
+   existing league's names, marks or colours are used.
+   =================================================================== */
+const TEAMS = [
+  { ab: "GLS", city: "GLASSTOWN",    nick: "VOLTAGE",     jersey: "#3C2E6B", trim: "#6FE3D2", helmet: "#2A2050", pants: "#C9CEDA", str:  7 },
+  { ab: "NGT", city: "NORTHGATE",    nick: "SENTINELS",   jersey: "#1F1F26", trim: "#C0392B", helmet: "#1F1F26", pants: "#8E9199", str:  6 },
+  { ab: "SUN", city: "SUNRIDGE",     nick: "SCORPIONS",   jersey: "#C2451E", trim: "#F0C46A", helmet: "#E0812C", pants: "#2B2118", str:  5 },
+  { ab: "IRN", city: "IRONPORT",     nick: "ANCHORS",     jersey: "#1B3A6B", trim: "#E8B33A", helmet: "#14294C", pants: "#D8DEE6", str:  3 },
+  { ab: "CSC", city: "CASCADE",      nick: "TIMBERJACKS", jersey: "#1E6B41", trim: "#F0E9D6", helmet: "#3B2A18", pants: "#F0E9D6", str:  1 },
+  { ab: "MBY", city: "MARROW BAY",   nick: "GULLS",       jersey: "#E3E7EC", trim: "#1E7BA6", helmet: "#1E7BA6", pants: "#1E7BA6", str: -1 },
+  { ab: "HLC", city: "HOLLOW CREEK", nick: "HOUNDS",      jersey: "#6B1F2E", trim: "#DCC7A1", helmet: "#4A1520", pants: "#DCC7A1", str: -2 },
+  { ab: "DST", city: "DUSTFALL",     nick: "COYOTES",     jersey: "#8A6A3C", trim: "#2F2A24", helmet: "#B89A67", pants: "#2F2A24", str: -4 },
+];
+const teamBy = ab => TEAMS.find(t => t.ab === ab) || TEAMS[3];
+
+// Positional baselines. Team strength shifts every rating by the same amount,
+// so a good team is good everywhere rather than lopsided.
+const BASE = {
+  QB: { spd: 48, acc: 52, agi: 54, pow: 42, hnd: 62, tkl: 20, cov: 20, blk: 25, awr: 72 },
+  RB: { spd: 74, acc: 76, agi: 78, pow: 62, hnd: 58, tkl: 30, cov: 25, blk: 40, awr: 56 },
+  WR: { spd: 80, acc: 78, agi: 74, pow: 42, hnd: 76, tkl: 25, cov: 35, blk: 30, awr: 60 },
+  TE: { spd: 58, acc: 56, agi: 50, pow: 68, hnd: 68, tkl: 35, cov: 30, blk: 62, awr: 58 },
+  OL: { spd: 34, acc: 40, agi: 34, pow: 80, hnd: 15, tkl: 35, cov: 10, blk: 84, awr: 54 },
+  DL: { spd: 46, acc: 56, agi: 44, pow: 82, hnd: 25, tkl: 72, cov: 18, blk: 30, awr: 54 },
+  LB: { spd: 62, acc: 64, agi: 60, pow: 70, hnd: 40, tkl: 80, cov: 56, blk: 35, awr: 66 },
+  CB: { spd: 82, acc: 80, agi: 78, pow: 40, hnd: 52, tkl: 52, cov: 78, blk: 20, awr: 62 },
+  S:  { spd: 72, acc: 70, agi: 66, pow: 55, hnd: 48, tkl: 70, cov: 68, blk: 22, awr: 72 },
+  K:  { spd: 40, acc: 40, agi: 40, pow: 58, hnd: 40, tkl: 10, cov: 10, blk: 10, awr: 76 },
+};
+
+function makeRatings(pos, strength, rng) {
+  const base = BASE[pos], out = {};
+  const shift = strength + rng.bell() * 4.5;
+  for (const k in base) out[k] = clamp(base[k] + shift, 5, 99);
+  return out;
+}
+
+const OFF_POS = ["QB", "RB", "WR", "WR", "TE", "OL", "OL"];
+const DEF_POS = ["DL", "DL", "LB", "LB", "CB", "CB", "S"];
+
+function makeRoster(team, seed) {
+  const rng = makeRNG(seed);
+  const used = new Set();
+  const bands = { QB: [1, 19], RB: [20, 39], WR: [80, 89], TE: [40, 49], OL: [60, 79],
+                  DL: [90, 99], LB: [50, 59], CB: [20, 39], S: [20, 39], K: [1, 9] };
+  const number = pos => {
+    const [lo, hi] = bands[pos];
+    for (let i = 0; i < 40; i++) { const n = rng.int(lo, hi); if (!used.has(n)) { used.add(n); return n; } }
+    for (let n = 0; n < 100; n++) if (!used.has(n)) { used.add(n); return n; }
+    return 0;
+  };
+  const group = list => list.map((pos, i) => ({
+    pos, i, num: number(pos), r: makeRatings(pos, team.str, rng),
+  }));
+  return { off: group(OFF_POS), def: group(DEF_POS), k: { pos: "K", num: number("K"), r: makeRatings("K", team.str, rng) } };
+}
+
+const scaled = (rating, lo, hi) => lo + (hi - lo) * clamp(rating, 0, 99) / 99;
+const topSpeed = r => scaled(r.spd, CFG.speedMin, CFG.speedMax);
+const accelOf  = r => scaled(r.acc, CFG.accelMin, CFG.accelMax);
+const turnOf   = r => scaled(r.agi, CFG.turnMin, CFG.turnMax);
+
+/* ===================================================================
+   FONT — a 5x7 bitmap face. Every character the game prints goes
+   through it, so the interface sits on the same pixel grid as the play.
+   =================================================================== */
+const GLYPHS = {
+  A:".###.,#...#,#...#,#####,#...#,#...#,#...#", B:"####.,#...#,#...#,####.,#...#,#...#,####.",
+  C:".###.,#...#,#....,#....,#....,#...#,.###.", D:"####.,#...#,#...#,#...#,#...#,#...#,####.",
+  E:"#####,#....,#....,####.,#....,#....,#####", F:"#####,#....,#....,####.,#....,#....,#....",
+  G:".###.,#...#,#....,#.###,#...#,#...#,.###.", H:"#...#,#...#,#...#,#####,#...#,#...#,#...#",
+  I:".###.,..#..,..#..,..#..,..#..,..#..,.###.", J:"..###,...#.,...#.,...#.,...#.,#..#.,.##..",
+  K:"#...#,#..#.,#.#..,##...,#.#..,#..#.,#...#", L:"#....,#....,#....,#....,#....,#....,#####",
+  M:"#...#,##.##,#.#.#,#...#,#...#,#...#,#...#", N:"#...#,##..#,#.#.#,#..##,#...#,#...#,#...#",
+  O:".###.,#...#,#...#,#...#,#...#,#...#,.###.", P:"####.,#...#,#...#,####.,#....,#....,#....",
+  Q:".###.,#...#,#...#,#...#,#.#.#,#..#.,.##.#", R:"####.,#...#,#...#,####.,#.#..,#..#.,#...#",
+  S:".####,#....,#....,.###.,....#,....#,####.", T:"#####,..#..,..#..,..#..,..#..,..#..,..#..",
+  U:"#...#,#...#,#...#,#...#,#...#,#...#,.###.", V:"#...#,#...#,#...#,#...#,#...#,.#.#.,..#..",
+  W:"#...#,#...#,#...#,#.#.#,#.#.#,##.##,#...#", X:"#...#,#...#,.#.#.,..#..,.#.#.,#...#,#...#",
+  Y:"#...#,#...#,.#.#.,..#..,..#..,..#..,..#..", Z:"#####,....#,...#.,..#..,.#...,#....,#####",
+  "0":".###.,#...#,#..##,#.#.#,##..#,#...#,.###.", "1":"..#..,.##..,..#..,..#..,..#..,..#..,.###.",
+  "2":".###.,#...#,....#,...#.,..#..,.#...,#####", "3":"#####,...#.,..#..,...#.,....#,#...#,.###.",
+  "4":"...#.,..##.,.#.#.,#..#.,#####,...#.,...#.", "5":"#####,#....,####.,....#,....#,#...#,.###.",
+  "6":"..##.,.#...,#....,####.,#...#,#...#,.###.", "7":"#####,....#,...#.,..#..,.#...,.#...,.#...",
+  "8":".###.,#...#,#...#,.###.,#...#,#...#,.###.", "9":".###.,#...#,#...#,.####,....#,...#.,.##..",
+  " ":".....,.....,.....,.....,.....,.....,.....", ":":".....,..#..,..#..,.....,..#..,..#..,.....",
+  "-":".....,.....,.....,#####,.....,.....,.....", ".":".....,.....,.....,.....,.....,..#..,.....",
+  ",":".....,.....,.....,.....,..#..,..#..,.#...", "'":"..#..,..#..,.....,.....,.....,.....,.....",
+  "!":"..#..,..#..,..#..,..#..,..#..,.....,..#..", "?":".###.,#...#,....#,...#.,..#..,.....,..#..",
+  "&":".##..,#..#.,#.#..,.#...,#.#.#,#..#.,.##.#", "/":"....#,...#.,...#.,..#..,.#...,.#...,#....",
+  "(":"...#.,..#..,.#...,.#...,.#...,..#..,...#.", ")":".#...,..#..,...#.,...#.,...#.,..#..,.#...",
+  "+":".....,..#..,..#..,#####,..#..,..#..,.....", "%":"##..#,##..#,...#.,..#..,.#...,#..##,#..##",
+  "·":".....,.....,..#..,..#..,.....,.....,.....",
+  "▲":"..#..,..#..,.###.,.###.,#####,#####,.....",
+  "▼":".....,#####,#####,.###.,.###.,..#..,.....",
+};
+const GW = 5, GH = 7, TRACK = 1;
+const glyphRows = ch => (GLYPHS[ch] || GLYPHS[ch?.toUpperCase?.()] || GLYPHS["?"]).split(",");
+const textW = s => s.length ? s.length * (GW + TRACK) - TRACK : 0;
+
+/* ===================================================================
+   SPRITES — hand-written pixel grids, recoloured per team and baked
+   into offscreen canvases once. The game ships no image files.
+
+   Players are drawn from behind and slightly above: you are looking
+   downfield with them, which is the only view that reads at this size.
+     .  clear   k outline   h helmet   j jersey   t trim
+     p  pants   c cleat     b ball     l lace     s skin
+   =================================================================== */
+const ART = {
+  run1: [
+    "...kkkkk...", "..khhhhhk..", "..khhhhhk..", "..kkhhhkk..",
+    ".kjjjjjjjk.", "kjjjttjjjjk", "kjjjttjjjjk", "kjjjjjjjjjk",
+    ".kjjjjjjjk.", "..kpppppk..", ".kpp...ppk.", ".kp.....pk.",
+    ".kc.....ck.", ".kk.....kk.",
+  ],
+  run2: [
+    "...kkkkk...", "..khhhhhk..", "..khhhhhk..", "..kkhhhkk..",
+    ".kjjjjjjjk.", "kjjjttjjjjk", "kjjjttjjjjk", "kjjjjjjjjjk",
+    ".kjjjjjjjk.", "..kpppppk..", "..kpp.ppk..", "..kp...pk..",
+    "..kc...ck..", "..kk...kk..",
+  ],
+  block: [
+    "...kkkkk...", "..khhhhhk..", "..khhhhhk..", "..kkhhhkk..",
+    "kkjjjjjjjkk", "kjjjttjjjjk", "kjjjttjjjjk", "kjjjjjjjjjk",
+    ".kjjjjjjjk.", "..kpppppk..", "..kpp.ppk..", "..kp...pk..",
+    "..kc...ck..", "..kk...kk..",
+  ],
+  down: [
+    "...........", "...........", "..kkkkkkk..", ".khhjjjjjk.",
+    ".khhjjjppk.", ".kkjjjjppk.", "..kkkkkkk..", "...........",
+    "...........", "...........", "...........", "...........",
+    "...........", "...........",
+  ],
+};
+const BALL_ART = [".bbb.", "bblbb", "bblbb", ".bbb."];
+
+const PAL_STATIC = { k: "#101418", c: "#171B1F", s: "#C98F63", b: "#7B4A22", l: "#F0EDE4" };
+
+const spriteCache = new Map();
+function sprite(name, team, unit) {
+  const key = name + "|" + team.ab + "|" + unit;
+  let hit = spriteCache.get(key);
+  if (hit) return hit;
+  const grid = ART[name];
+  const pal = Object.assign({}, PAL_STATIC, {
+    h: team.helmet, j: team.jersey, t: team.trim, p: team.pants,
+  });
+  hit = bake(grid, pal, unit);
+  spriteCache.set(key, hit);
+  return hit;
+}
+function ballSprite(unit) {
+  const key = "ball|" + unit;
+  let hit = spriteCache.get(key);
+  if (!hit) { hit = bake(BALL_ART, PAL_STATIC, unit); spriteCache.set(key, hit); }
+  return hit;
+}
+function bake(grid, pal, unit) {
+  const w = grid[0].length, h = grid.length;
+  const c = document.createElement("canvas");
+  c.width = w * unit; c.height = h * unit;
+  const g = c.getContext("2d");
+  for (let y = 0; y < h; y++) {
+    const row = grid[y];
+    for (let x = 0; x < w; x++) {
+      const col = pal[row[x]];
+      if (!col) continue;
+      g.fillStyle = col;
+      g.fillRect(x * unit, y * unit, unit, unit);
+    }
+  }
+  return { canvas: c, w, h };
+}
+
+/* ===================================================================
+   AUDIO — procedural chiptune. No sound files ship with the game.
+   iOS refuses to start an AudioContext without a gesture, so the boot
+   screen exists partly to provide one.
+   =================================================================== */
+const Sound = (() => {
+  let ctx = null, master = null, on = true;
+
+  function init() {
+    if (ctx) { if (ctx.state === "suspended") ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    ctx = new AC();
+    master = ctx.createGain();
+    master.gain.value = 0.55;
+    master.connect(ctx.destination);
+  }
+
+  function tone(freq, dur, { type = "square", gain = 0.18, slide = 0, delay = 0 } = {}) {
+    if (!ctx || !on) return;
+    const t = ctx.currentTime + delay;
+    const osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t);
+    if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(g).connect(master);
+    osc.start(t); osc.stop(t + dur + 0.02);
+  }
+
+  function noise(dur, { gain = 0.2, freq = 900, q = 1, delay = 0 } = {}) {
+    if (!ctx || !on) return;
+    const t = ctx.currentTime + delay;
+    const n = Math.floor(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const filt = ctx.createBiquadFilter();
+    filt.type = "bandpass"; filt.frequency.value = freq; filt.Q.value = q;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(filt).connect(g).connect(master);
+    src.start(t); src.stop(t + dur);
+  }
+
+  const arp = (notes, step, gain) =>
+    notes.forEach((f, i) => tone(f, step * 1.6, { gain, delay: i * step }));
+
+  return {
+    init,
+    get enabled() { return on; },
+    set enabled(v) { on = v; },
+    blip:  () => tone(880, 0.05, { gain: 0.10 }),
+    back:  () => tone(330, 0.07, { gain: 0.10 }),
+    snap:  () => noise(0.07, { gain: 0.16, freq: 1600, q: 0.7 }),
+    throwIt: () => tone(520, 0.10, { gain: 0.10, slide: 260 }),
+    hit:   () => { noise(0.12, { gain: 0.22, freq: 320, q: 0.8 }); tone(110, 0.10, { gain: 0.12, slide: -50 }); },
+    bigHit:() => { noise(0.22, { gain: 0.3, freq: 200, q: 0.6 }); tone(90, 0.2, { gain: 0.18, slide: -45 }); },
+    grab:  () => tone(700, 0.09, { gain: 0.14, type: "triangle" }),
+    miss:  () => tone(420, 0.20, { gain: 0.12, slide: -160 }),
+    kick:  () => { noise(0.10, { gain: 0.20, freq: 700 }); tone(200, 0.12, { gain: 0.14, slide: -90 }); },
+    first: () => arp([523, 659, 784], 0.07, 0.14),
+    score: () => arp([523, 659, 784, 1046, 784, 1046], 0.10, 0.16),
+    bad:   () => arp([440, 349, 294, 233], 0.10, 0.14),
+    whistle: () => { tone(2350, 0.28, { gain: 0.07 }); tone(2510, 0.28, { gain: 0.07 }); },
+    horn:  () => { tone(147, 0.9, { gain: 0.14 }); tone(220, 0.9, { gain: 0.10 }); },
+    crowd: () => noise(1.1, { gain: 0.16, freq: 500, q: 0.4 }),
+  };
+})();
+
+/* ===================================================================
+   STORE — settings and records. Every read has a default, so a missing
+   or corrupt key degrades to a fresh profile instead of a blank screen.
+   =================================================================== */
+const Store = {
+  read(key, fallback) {
+    try {
+      const raw = localStorage.getItem("pixelbowl." + key);
+      if (!raw) return fallback;
+      const parsed = JSON.parse(raw);
+      return (parsed && typeof parsed === "object") ? Object.assign({}, fallback, parsed) : fallback;
+    } catch (e) { return fallback; }
+  },
+  write(key, value) {
+    try { localStorage.setItem("pixelbowl." + key, JSON.stringify(value)); } catch (e) { /* private mode */ }
+  },
+};
+let SETTINGS = Store.read("settings", { team: "IRN", quarter: 3, sound: true, diff: 1 });
+let RECORD = Store.read("record", { played: 0, won: 0, lost: 0, tied: 0, best: 0, longestTD: 0 });
+const saveSettings = () => Store.write("settings", SETTINGS);
+const saveRecord = () => Store.write("record", RECORD);
+
+// Difficulty changes how well the defence *reads* the play — how often it
+// calls the right scheme, and how quickly its defenders react. It never
+// changes how fast anyone runs. A rubber-banded speed boost is the thing
+// that makes an arcade sports game feel like it is cheating.
+const DIFFS = [
+  { name: "ROOKIE",  read: 0.45, react: 1.55 },
+  { name: "PRO",     read: 0.72, react: 1.00 },
+  { name: "ALL-PRO", read: 0.90, react: 0.72 },
+];
+
+/* ===================================================================
+   PLAYBOOK — routes in team-local yards. `y` is downfield (you always
+   attack up the screen), `x` is lateral, positive toward the right
+   sideline. Nothing ever mirrors, which is the whole reason the field
+   is oriented this way.
+   =================================================================== */
+const GUN = [
+  { x:  0.0, y: -5.0 },   // QB
+  { x: -3.2, y: -5.0 },   // RB
+  { x: -11.0, y: 0 },     // WR X
+  { x:  11.0, y: 0 },     // WR Z
+  { x:  4.5, y: 0 },      // TE
+  { x: -2.0, y: 0 },      // OL
+  { x:  2.0, y: 0 },      // OL
+];
+const UNDER = [
+  { x:  0.0, y: -1.2 },
+  { x:  0.0, y: -5.5 },
+  { x: -10.0, y: 0 },
+  { x:  10.0, y: 0 },
+  { x:  4.5, y: 0 },
+  { x: -2.0, y: 0 },
+  { x:  2.0, y: 0 },
+];
+
+const R = (x, y, s = 1) => ({ x, y, s });
+
+const PLAYS = [
+  {
+    id: "dive", name: "DIVE", kind: "run", tag: "SAFE",
+    blurb: "Straight ahead. Keeps the clock moving.",
+    form: UNDER, gain: 4, develop: 0.35,
+    jobs: [
+      { t: "hand" },
+      { t: "carry", route: [R(0.5, 2), R(0.8, 8)] },
+      { t: "block", bias: -0.3 }, { t: "block", bias: 0.3 },
+      { t: "block", bias: 0.4 }, { t: "block", bias: -0.5 }, { t: "block", bias: 0.5 },
+    ],
+  },
+  {
+    id: "sweep", name: "SWEEP", kind: "run", tag: "EDGE",
+    blurb: "Get outside and turn it up.",
+    form: UNDER, gain: 6, develop: 0.5,
+    jobs: [
+      { t: "hand" },
+      { t: "carry", route: [R(9, -1.5), R(13, 2), R(14, 11)] },
+      { t: "block", bias: 1 }, { t: "block", bias: 0.2 },
+      { t: "block", bias: 1 }, { t: "block", bias: 0.8 }, { t: "block", bias: 1 },
+    ],
+  },
+  {
+    id: "slants", name: "SLANTS", kind: "pass", tag: "QUICK",
+    blurb: "Three steps and out. Beats a blitz.",
+    form: GUN, gain: 7, develop: 1.1,
+    jobs: [
+      { t: "drop", depth: 3 },
+      { t: "route", route: [R(1, 2), R(6, 8)] },
+      { t: "route", route: [R(0, 3), R(5, 9)] },
+      { t: "route", route: [R(0, 3), R(-5, 9)] },
+      { t: "route", route: [R(0, 5), R(-6, 6, 0.85)] },
+      { t: "pass" }, { t: "pass" },
+    ],
+  },
+  {
+    id: "curls", name: "CURLS", kind: "pass", tag: "CHAINS",
+    blurb: "Sit down past the sticks and come back.",
+    form: GUN, gain: 11, develop: 1.7,
+    jobs: [
+      { t: "drop", depth: 5 },
+      { t: "route", route: [R(-4, 4), R(-7, 5, 0.8)] },
+      { t: "route", route: [R(0, 12), R(1.5, 10.5, 0.7)] },
+      { t: "route", route: [R(0, 12), R(-1.5, 10.5, 0.7)] },
+      { t: "route", route: [R(2, 8), R(6, 8, 0.8)] },
+      { t: "pass" }, { t: "pass" },
+    ],
+  },
+  {
+    id: "verts", name: "VERTS", kind: "pass", tag: "DEEP",
+    blurb: "Everybody runs. Hold it and take the shot.",
+    form: GUN, gain: 20, develop: 2.6,
+    jobs: [
+      { t: "drop", depth: 6 },
+      { t: "route", route: [R(-2, 6), R(-3, 20)] },
+      { t: "route", route: [R(-1, 14), R(-2, 30)] },
+      { t: "route", route: [R(1, 14), R(2, 30)] },
+      { t: "route", route: [R(2, 12), R(5, 26)] },
+      { t: "pass" }, { t: "pass" },
+    ],
+  },
+  {
+    id: "screen", name: "SCREEN", kind: "pass", tag: "TRAP",
+    blurb: "Let them come, then throw behind the rush.",
+    form: GUN, gain: 9, develop: 1.4,
+    jobs: [
+      { t: "drop", depth: 5 },
+      { t: "delay", wait: 0.6, route: [R(-6, -1), R(-9, 1)] },
+      { t: "route", route: [R(-1, 12)] },
+      { t: "route", route: [R(1, 12)] },
+      { t: "route", route: [R(3, 9)] },
+      { t: "delay", wait: 0.7, route: [R(-7, 1), R(-9, 6)] },
+      { t: "pass" },
+    ],
+  },
+];
+const playById = id => PLAYS.find(p => p.id === id) || PLAYS[0];
+
+/* Defensive schemes. The CPU picks one by down and distance; you never
+   call defense, because you never play it. */
+const SCHEMES = [
+  {
+    id: "base", name: "BASE",
+    align: [{ x: -2.5, y: 1.5 }, { x: 2.5, y: 1.5 }, { x: -5, y: 5 }, { x: 5, y: 5 },
+            { x: -11, y: 7 }, { x: 11, y: 7 }, { x: 0, y: 14 }],
+    jobs: [{ t: "rush" }, { t: "rush" }, { t: "fill", bias: -0.6 }, { t: "zone", x: 5, y: 9, r: 8 },
+           { t: "man", i: 2 }, { t: "man", i: 3 }, { t: "zone", x: 0, y: 17, r: 13 }],
+    vsRun: 0.62, vsPass: 0.62,
+  },
+  {
+    id: "blitz", name: "BLITZ",
+    align: [{ x: -3, y: 1.5 }, { x: 3, y: 1.5 }, { x: -6.5, y: 3 }, { x: 6.5, y: 3 },
+            { x: -11, y: 6 }, { x: 11, y: 6 }, { x: 3, y: 10 }],
+    jobs: [{ t: "rush" }, { t: "rush" }, { t: "rush" }, { t: "rush" },
+           { t: "man", i: 2 }, { t: "man", i: 3 }, { t: "man", i: 4 }],
+    vsRun: 0.5, vsPass: 0.45,
+  },
+  {
+    id: "zone", name: "COVER 2",
+    align: [{ x: -2.5, y: 1.5 }, { x: 2.5, y: 1.5 }, { x: -7, y: 7 }, { x: 7, y: 7 },
+            { x: -12, y: 5 }, { x: 12, y: 5 }, { x: 0, y: 16 }],
+    jobs: [{ t: "rush" }, { t: "contain", side: -1 },
+           { t: "zone", x: -7, y: 10, r: 9 }, { t: "zone", x: 7, y: 10, r: 9 },
+           { t: "zone", x: -12, y: 6, r: 8 }, { t: "zone", x: 12, y: 6, r: 8 },
+           { t: "zone", x: 0, y: 20, r: 16 }],
+    vsRun: 0.45, vsPass: 0.78,
+  },
+  {
+    id: "prevent", name: "PREVENT",
+    align: [{ x: -2, y: 1.5 }, { x: 2, y: 1.5 }, { x: -9, y: 12 }, { x: 9, y: 12 },
+            { x: -13, y: 17 }, { x: 13, y: 17 }, { x: 0, y: 25 }],
+    jobs: [{ t: "rush" }, { t: "spy" },
+           { t: "zone", x: -10, y: 16, r: 11 }, { t: "zone", x: 10, y: 16, r: 11 },
+           { t: "zone", x: -13, y: 25, r: 13 }, { t: "zone", x: 13, y: 25, r: 13 },
+           { t: "zone", x: 0, y: 33, r: 20 }],
+    vsRun: 0.22, vsPass: 0.88,
+  },
+  {
+    id: "goalline", name: "GOAL LINE",
+    align: [{ x: -3, y: 1 }, { x: 3, y: 1 }, { x: -6, y: 3 }, { x: 6, y: 3 },
+            { x: -10, y: 5 }, { x: 10, y: 5 }, { x: 0, y: 7 }],
+    jobs: [{ t: "rush" }, { t: "rush" }, { t: "fill", bias: -1 }, { t: "fill", bias: 1 },
+           { t: "man", i: 2 }, { t: "man", i: 3 }, { t: "fill", bias: 0 }],
+    vsRun: 0.92, vsPass: 0.30,
+  },
+];
+
+function callScheme(state, rng) {
+  const diff = DIFFS[SETTINGS.diff];
+  if (!rng.chance(diff.read)) return rng.pick(SCHEMES);
+  const toGo = state.toGo, toGoal = FIELD.oppGoal - state.los;
+  if (toGoal <= 5) return SCHEMES[4];
+  if (state.q >= 4 && state.clock < 100 && state.them > state.us) return SCHEMES[3];
+  if (toGo <= 2) return rng.chance(0.6) ? SCHEMES[4] : SCHEMES[0];
+  if (state.down >= 3 && toGo >= 7) return rng.chance(0.5) ? SCHEMES[1] : SCHEMES[2];
+  const roll = rng.unit();
+  if (roll < 0.36) return SCHEMES[0];
+  if (roll < 0.62) return SCHEMES[2];
+  if (roll < 0.85) return SCHEMES[1];
+  return SCHEMES[4];
+}
+
+/* ===================================================================
+   THE PLAY — one snap, from the hike to the whistle.
+
+   Stepped at a fixed 1/60 regardless of the display's frame rate, so
+   the same seed and the same inputs give the same play every time.
+   =================================================================== */
+function makePlay(o) {
+  const rng = makeRNG(o.seed);
+  const play = o.play, scheme = o.scheme;
+  const react = DIFFS[SETTINGS.diff].react;
+
+  const P = [];
+  const spot = { x: o.ballX, y: o.los };
+
+  play.form.forEach((a, i) => {
+    const prof = o.offense.off[i];
+    P.push({
+      id: i, side: "off", idx: i, pos: prof.pos, num: prof.num, r: prof.r,
+      x: clamp(spot.x + a.x, 1.4, FIELD.W - 1.4),
+      y: clamp(spot.y + a.y, FIELD.ownGoal - 2, FIELD.oppGoal - 0.5),
+      vx: 0, vy: 0, face: Math.PI / 2, mot: "set", timer: 0, stamina: 1,
+      job: play.jobs[i], route: null, ri: 0, rspeed: 1,
+      hasBall: false, breaks: 0, slowT: 0, eng: -1, shed: 0, immune: 0, delay: 0,
+    });
+  });
+  // Near the goal line there is no room behind the defence, so the whole front
+  // compresses in proportion rather than every defender piling onto the last
+  // legal yard — which is what a hard clamp produces, and it plays like a wall.
+  const deepest = scheme.align.reduce((m, a) => Math.max(m, a.y), 1);
+  const room = FIELD.oppGoal + 2 - spot.y;
+  const squeeze = room < deepest ? Math.max(0.35, room / deepest) : 1;
+
+  scheme.align.forEach((a, i) => {
+    const prof = o.defense.def[i];
+    P.push({
+      id: 7 + i, side: "def", idx: i, pos: prof.pos, num: prof.num, r: prof.r,
+      x: clamp(spot.x + a.x, 1.4, FIELD.W - 1.4),
+      // A deep safety may stand in the end zone — that is where he belongs,
+      // and it is why a prevent look gives up the goal-line run.
+      y: clamp(spot.y + a.y * squeeze, FIELD.ownGoal + 0.5, FIELD.oppGoal + 2),
+      vx: 0, vy: 0, face: -Math.PI / 2, mot: "set", timer: 0, stamina: 1,
+      job: scheme.jobs[i], route: null, ri: 0, rspeed: 1,
+      hasBall: false, breaks: 0, slowT: 0, eng: -1, shed: 0, immune: 0, delay: 0,
+    });
+  });
+
+  // Resolve routes into absolute field points, once, at build time.
+  P.forEach(p => {
+    if (p.side !== "off") return;
+    const j = p.job;
+    const src = j.route || null;
+    if (!src) return;
+    p.route = src.map(n => ({
+      x: clamp(p.x + n.x, 1.0, FIELD.W - 1.0),
+      y: p.y + n.y,
+      s: n.s,
+    }));
+    if (j.t === "delay") p.delay = j.wait;
+  });
+
+  const S = {
+    P, play, scheme, rng,
+    los: o.los, lineToGain: o.lineToGain, ballX: o.ballX,
+    t: 0, snapped: false, over: false, result: null,
+    turnover: false,          // the defence now has it and is running back
+    ball: { state: "held", who: 0, x: spot.x, y: spot.y, h: 0,
+            fx: 0, fy: 0, tx: 0, ty: 0, tt: 0, dur: 0, apex: 0, from: -1 },
+    handoffAt: play.kind === "run" ? 0.3 : -1,
+    handoffDone: false,
+    threw: false, completed: false,
+    windup: -1, windupTo: null,
+    shake: 0,
+    passAttempted: false,
+  };
+  P[0].hasBall = true;
+
+  // ----- helpers -------------------------------------------------------
+  const carrier = () => S.ball.state === "held" ? P[S.ball.who] : null;
+  const attacking = p => (p.side === "off") !== S.turnover;
+  const goalY = () => S.turnover ? FIELD.ownGoal : FIELD.oppGoal;
+  const dirY = () => S.turnover ? -1 : 1;
+
+  function nearestFoe(x, y, wantAttacking) {
+    let best = null, bd = Infinity;
+    for (const p of P) {
+      if (p.mot === "down" || attacking(p) !== wantAttacking) continue;
+      const d = dist(x, y, p.x, p.y);
+      if (d < bd) { bd = d; best = p; }
+    }
+    return { p: best, d: bd };
+  }
+
+  function speedOf(p) {
+    let s = topSpeed(p.r);
+    if (p.sprint && p.stamina > 0.02) s *= CFG.sprintMul;
+    if (p.slowT > 0) s *= CFG.breakSlow;
+    if (p.mot === "engaged") s *= CFG.engagedSpeed;
+    else if (p.mot === "stumble") s *= 0.25;
+    else if (p.mot === "down" || p.mot === "set") s = 0;
+    return s;
+  }
+
+  // Eligible targets, for the receiver markers and for the aim assist.
+  // A lineman released on a screen is a blocker, not a target — he has the
+  // hands of a lineman and throwing to him is never what you meant.
+  S.targets = () => P.filter(p => p.side === "off" && p.pos !== "OL" &&
+    (p.job.t === "route" || p.job.t === "delay") && p.mot !== "down");
+
+  S.qbHasIt = () => {
+    const c = carrier();
+    return !!c && c.idx === 0 && !S.turnover && play.kind === "pass" && !S.threw && c.y <= S.los + 0.3;
+  };
+
+  // ----- snap ----------------------------------------------------------
+  S.snap = () => {
+    if (S.snapped) return;
+    S.snapped = true;
+    P.forEach(p => { if (p.mot === "set") p.mot = "run"; });
+    Sound.snap();
+  };
+
+  // ----- throwing ------------------------------------------------------
+  S.throwTo = (tx, ty) => {
+    if (!S.qbHasIt() || S.windup >= 0) return;
+    S.windup = CFG.throwWind;
+    S.windupTo = { x: tx, y: ty };
+  };
+
+  function release() {
+    const qb = P[0];
+    const aim = S.windupTo;
+    S.windup = -1; S.windupTo = null;
+    if (!aim) return;
+
+    const pressed = nearestFoe(qb.x, qb.y, false).d < CFG.pressureR;
+    const precision = 1 - clamp(qb.r.awr / 140, 0, 0.85);
+    let scatter = CFG.scatterBase * precision;
+    if (pressed) scatter += CFG.scatterPressure * precision;
+
+    const lx = clamp(aim.x + rng.bell() * scatter, 0.5, FIELD.W - 0.5);
+    const ly = clamp(aim.y + rng.bell() * scatter, 0.5, FIELD.L - 0.5);
+
+    const d = dist(qb.x, qb.y, lx, ly);
+    qb.hasBall = false;
+    S.threw = true; S.passAttempted = true;
+    S.ball = {
+      state: "air", who: -1, from: 0,
+      x: qb.x, y: qb.y, h: 0,
+      fx: qb.x, fy: qb.y, tx: lx, ty: ly,
+      tt: 0, dur: clamp(d / CFG.passSpeed, 0.22, 2.4),
+      apex: Math.min(d * CFG.passArc, CFG.passArcMax),
+    };
+    Sound.throwIt();
+  }
+
+  function arrive() {
+    const b = S.ball;
+    const near = [];
+    for (const p of P) {
+      if (p.mot === "down") continue;
+      const d = dist(p.x, p.y, b.tx, b.ty);
+      if (d <= CFG.catchR) near.push({ p, d });
+    }
+    near.sort((a, c) => a.d - c.d);
+    const off = near.find(n => n.p.side === "off");
+    const def = near.find(n => n.p.side === "def");
+
+    if (def && (!off || def.d < off.d)) {
+      let pick = CFG.pickShare + ((def.p.r.hnd + def.p.r.cov) / 2 - 50) * 0.004;
+      if (rng.chance(clamp(pick, 0.03, 0.45))) return intercept(def.p);
+      return end("incomplete", b.tx, b.ty, "BROKEN UP");
+    }
+    if (!off) return end("incomplete", b.tx, b.ty, "INCOMPLETE");
+
+    let odds = CFG.catchBase + (off.p.r.hnd - 50) * CFG.catchRating;
+    if (def) odds -= clamp(1 - def.d / (CFG.catchR * 1.7), 0, 1) * (0.2 + (def.p.r.cov - 50) * 0.003);
+    if (rng.chance(clamp(odds, 0.12, 0.99))) {
+      off.p.hasBall = true; off.p.x = b.tx; off.p.y = b.ty;
+      S.ball = { state: "held", who: off.p.id, x: b.tx, y: b.ty, h: 0 };
+      S.completed = true;
+      Sound.grab();
+      // Route runners become blockers the moment the ball is caught.
+      P.forEach(p => { if (p.side === "off" && p !== off.p && (p.job.t === "route" || p.job.t === "delay")) p.job = { t: "block", bias: 0 }; });
+      return;
+    }
+    if (def && def.d < CFG.catchR * 0.8 && rng.chance(CFG.pickShare * 0.4)) return intercept(def.p);
+    Sound.miss();
+    end("incomplete", b.tx, b.ty, off.d < 0.8 ? "DROPPED" : "INCOMPLETE");
+  }
+
+  function intercept(d) {
+    S.turnover = true;
+    d.hasBall = true;
+    d.x = S.ball.tx; d.y = S.ball.ty;
+    S.ball = { state: "held", who: d.id, x: d.x, y: d.y, h: 0 };
+    S.shake = 0.35;
+    Sound.bad();
+    flipJobs(d);
+  }
+
+  function flipJobs(holder) {
+    P.forEach(p => {
+      if (p === holder) return;
+      p.eng = -1;
+      if (p.mot === "engaged") p.mot = "run";
+      p.job = attacking(p) ? { t: "block", bias: 0 } : { t: "fill", bias: 0 };
+      p.route = null;
+    });
+  }
+
+  // ----- contact -------------------------------------------------------
+  function tackleTry(t, c, mul = 1) {
+    let odds = (CFG.tackleBase + (t.r.tkl - c.r.pow) * CFG.tackleRating) * mul;
+    if (c.sprint) odds -= 0.09;
+    const cx = (c.x - t.x), cy = (c.y - t.y), cl = Math.hypot(cx, cy) || 1;
+    odds += (Math.cos(t.face) * cx / cl + Math.sin(t.face) * cy / cl) * 0.15;
+    odds += c.breaks * 0.13;
+    // Goal-line surge: a back with the end zone in front of him falls forward.
+    if (Math.abs(goalY() - c.y) < 3) odds -= CFG.goalLineSurge;
+    if (c.breaks >= CFG.maxBreaks) odds = 1;
+    odds = clamp(odds, 0.05, 0.99);
+
+    if (rng.chance(odds)) {
+      let fum = CFG.fumbleBase + (t.r.pow - c.r.hnd) * 0.0006;
+      if (c.idx === 0 && !S.turnover && c.y < S.los) fum *= 2.0;
+      if (rng.chance(clamp(fum, 0, 0.12))) return fumble(c, t);
+
+      // Reaching for the plane: a back stopped just short can still stretch the
+      // ball over on the way down.
+      const toGoal = Math.abs(goalY() - c.y);
+      if (toGoal <= 2.0) {
+        const reach = clamp(0.5 + (c.r.pow - t.r.tkl) * 0.006 - toGoal * 0.2, 0.04, 0.8);
+        if (rng.chance(reach)) c.y = goalY() + dirY() * 0.06;
+      }
+
+      c.mot = "down"; c.vx = c.vy = 0;
+      t.mot = "down"; t.vx = t.vy = 0;
+      S.shake = 0.25;
+      Sound.hit();
+      concludeTackle(c);
+    } else {
+      c.breaks++;
+      c.slowT = CFG.breakSlowTime;
+      t.mot = "stumble"; t.timer = CFG.stumbleTime; t.vx *= 0.2; t.vy *= 0.2;
+      S.shake = 0.18;
+      Sound.bigHit();
+    }
+  }
+
+  function fumble(c, t) {
+    c.hasBall = false; c.mot = "down"; c.vx = c.vy = 0;
+    const dx = c.x - t.x, dy = c.y - t.y, dl = Math.hypot(dx, dy) || 1;
+    S.ball = { state: "loose", who: -1, x: c.x, y: c.y, h: 0,
+               vx: dx / dl * rng.range(3, 7), vy: dy / dl * rng.range(3, 7), timer: 1.4 };
+    S.shake = 0.5;
+    Sound.bad();
+  }
+
+  function concludeTackle(c) {
+    // He may have got the ball across as he went down.
+    const crossed = S.turnover ? c.y <= FIELD.ownGoal : c.y >= FIELD.oppGoal;
+    if (crossed) {
+      Sound.score();
+      return end(S.turnover ? (S.passAttempted && !S.completed ? "int-td" : "fumble-td") : "td",
+                 c.x, c.y, S.turnover ? "PICK SIX" : "TOUCHDOWN!");
+    }
+    // Down in the end zone you were defending is a safety — and after an
+    // interception that is the other team's end zone, which is exactly why
+    // this reads `dirY()` rather than the original sides.
+    const ownGoal = S.turnover ? FIELD.oppGoal : FIELD.ownGoal;
+    const inOwnEZ = S.turnover ? c.y > FIELD.oppGoal : c.y < FIELD.ownGoal;
+    if (inOwnEZ) return end("safety", c.x, c.y, "SAFETY");
+    if (S.turnover) return end(S.passAttempted && !S.completed ? "int" : "fumble", c.x, c.y,
+                               S.passAttempted && !S.completed ? "INTERCEPTED" : "FUMBLE LOST");
+    const gained = c.y - S.los;
+    if (c.idx === 0 && play.kind === "pass" && gained < 0 && !S.threw)
+      return end("sack", c.x, c.y, "SACKED FOR " + Math.round(-gained));
+    end("gain", c.x, c.y, gainLine(gained));
+    void ownGoal;
+  }
+
+  const gainLine = g => {
+    const y = Math.round(g);
+    if (y === 0) return "NO GAIN";
+    return y < 0 ? "LOSS OF " + (-y) : "GAIN OF " + y;
+  };
+
+  function end(kind, x, y, headline) {
+    if (S.over) return;
+    S.over = true;
+    S.ball = { state: "dead", who: -1, x, y, h: 0 };
+    S.result = {
+      kind, x: clamp(x, 0.5, FIELD.W - 0.5), y,
+      yards: y - S.los,
+      headline,
+      elapsed: S.t * CFG.clockSpeed,
+      pass: S.passAttempted, complete: S.completed,
+    };
+    Sound.whistle();
+  }
+  S.end = end;
+
+  // ----- steering ------------------------------------------------------
+  const want = new Array(14).fill(null).map(() => ({ x: 0, y: 0 }));
+  const setWant = (p, x, y, mul = 1) => {
+    const l = Math.hypot(x, y);
+    const s = speedOf(p) * mul;
+    if (l < 1e-6) { want[p.id].x = 0; want[p.id].y = 0; return; }
+    want[p.id].x = x / l * s; want[p.id].y = y / l * s;
+  };
+
+  function followRoute(p, arrive) {
+    if (!p.route || p.ri >= p.route.length) return false;
+    const n = p.route[p.ri];
+    const dx = n.x - p.x, dy = n.y - p.y;
+    if (Math.hypot(dx, dy) <= arrive) { p.ri++; return followRoute(p, arrive) || true; }
+    setWant(p, dx, dy, n.s);
+    return true;
+  }
+
+  // Once the ball is a runner or on the floor, every defender abandons his
+  // drop and takes an angle. Before that, zones honour their landmarks.
+  function ballIsRunning() {
+    if (S.ball.state === "loose") return true;
+    const c = carrier();
+    if (!c) return false;
+    if (S.turnover) return true;
+    if (c.idx !== 0) return true;
+    return c.y > S.los + 0.4;      // a scrambling quarterback is a runner
+  }
+
+  function pursue(p) {
+    const c = carrier();
+    const ahead = 0.42 * clamp(p.r.awr / 60, 0.5, 1.6) * react;
+    const tx = c ? c.x + c.vx * ahead : S.ball.x;
+    const ty = c ? c.y + c.vy * ahead : S.ball.y;
+    setWant(p, tx - p.x, ty - p.y);
+  }
+
+  function blockTarget(p, aimX, aimY) {
+    let best = null, bd = Infinity;
+    for (const q of P) {
+      if (attacking(q) || q.mot !== "run" || q.eng >= 0 || q.immune > 0) continue;
+      if (P.some(z => z.eng === q.id)) continue;
+      const d = dist(q.x, q.y, aimX, aimY) + dist(q.x, q.y, p.x, p.y) * 0.35;
+      if (d < bd) { bd = d; best = q; }
+    }
+    return best;
+  }
+
+  function engage(b, r) {
+    if (b.eng >= 0 || r.eng >= 0 || r.immune > 0 || r.mot !== "run" || b.mot !== "run") return;
+    b.eng = r.id; r.eng = b.id;
+    b.mot = "engaged"; r.mot = "engaged"; r.shed = 0;
+  }
+  function disengage(p) {
+    const q = p.eng >= 0 ? P[p.eng] : null;
+    if (q) { q.eng = -1; if (q.mot === "engaged") q.mot = "run"; }
+    p.eng = -1; if (p.mot === "engaged") p.mot = "run";
+  }
+
+  function carrierAI(p) {
+    const dy = dirY();
+    let ax = 0, ay = 0;
+    for (const q of P) {
+      if (attacking(q) || q.mot === "down") continue;
+      const ddx = p.x - q.x, ddy = p.y - q.y;
+      const d = Math.hypot(ddx, ddy);
+      if (d > CFG.carrierAvoid || d < 0.01) continue;
+      const infront = (q.y - p.y) * dy > -1 ? 1 : 0.2;
+      const w = (CFG.carrierAvoid - d) / CFG.carrierAvoid * infront;
+      ax += ddx / d * w; ay += ddy / d * w;
+    }
+    // Sidestep traffic, never reverse field. Backing up to dodge a tackler
+    // costs more than it saves, and it reads as a bug even when it isn't.
+    if (ay * dy < 0) ay *= 0.2;
+    let sx = ax * 2.2;
+    let sy = dy + ay * 0.5;
+    if (sy * dy < 0.3) sy = dy * 0.3;
+    if (p.x < 4) sx += (4 - p.x) * 0.5;
+    if (p.x > FIELD.W - 4) sx -= (p.x - (FIELD.W - 4)) * 0.5;
+    // Near the goal line, straight ahead beats clever.
+    if (Math.abs(goalY() - p.y) < 6) { sx *= 0.3; sy = dy; }
+    setWant(p, sx, sy);
+    p.sprint = nearestFoe(p.x, p.y, false).d > 2.5;
+  }
+
+  function drive(dt, input) {
+    for (let i = 0; i < P.length; i++) { want[i].x = 0; want[i].y = 0; }
+
+    const c = carrier();
+    const aiming = S.qbHasIt() && !S.tucked;
+    const flight = S.ball.state === "air" && !S.ball.isKick;
+
+    // Which player is the thumb driving this frame?
+    let user = null;
+    if (c && attacking(c) && !aiming) user = c;
+    else if (flight) {
+      let bd = Infinity;
+      for (const p of P) {
+        if (p.side !== "off" || p.mot === "down") continue;
+        const d = dist(p.x, p.y, S.ball.tx, S.ball.ty);
+        if (d < bd) { bd = d; user = p; }
+      }
+    }
+    S.user = user ? user.id : -1;
+
+    for (const p of P) {
+      if (p.mot !== "run" && p.mot !== "engaged") continue;
+
+      if (p === user) {
+        if (input.steerX || input.steerY) {
+          setWant(p, input.steerX, input.steerY);
+          p.sprint = input.sprint;
+          continue;
+        }
+        // Thumb off the screen: the carrier keeps running rather than stopping
+        // dead in the hole. You steer him, you do not have to drive him — which
+        // is the difference between a control scheme and a chore.
+        if (p.hasBall) { carrierAI(p); continue; }
+      }
+
+      if (p.side === "off") offenseAI(p, aiming);
+      else defenseAI(p);
+    }
+  }
+
+  function offenseAI(p, aiming) {
+    if (p.hasBall) {
+      // A quarterback who is still looking to throw runs his drop, not the
+      // ball. He only becomes a runner once he tucks it or crosses the line.
+      if (p.job.t === "drop" && !S.tucked && !S.turnover
+          && play.kind === "pass" && p.y <= S.los + 0.3) {
+        return dropbackAI(p, p.job.depth);
+      }
+      // A designed run follows its path to the hole before the back starts
+      // improvising. Without this he dances five yards deep and gets swallowed.
+      if (p.job.t === "carry" && p.route && p.ri < p.route.length && p.y < S.los + 1) {
+        if (followRoute(p, 0.9)) return;
+      }
+      return carrierAI(p);
+    }
+    const j = p.job;
+    if (breaksOnBall(p)) return;
+
+    if (j.t === "drop" || j.t === "hand") return dropbackAI(p, j.t === "drop" ? j.depth : 0);
+    if (j.t === "carry") { if (!followRoute(p, 0.7)) setWant(p, 0, dirY()); return; }
+    if (j.t === "delay") {
+      if (p.delay > 0) return protectAI(p);
+      if (!followRoute(p, 1.0)) return driftOpen(p);
+      return;
+    }
+    if (j.t === "route") { if (!followRoute(p, 1.0)) driftOpen(p); return; }
+    if (j.t === "pass") return protectAI(p);
+    if (j.t === "block") return runBlockAI(p, j.bias || 0);
+    void aiming;
+  }
+
+  // Anyone eligible who is near where the ball is coming down goes and gets it.
+  function breaksOnBall(p) {
+    if (S.ball.state !== "air") return false;
+    const j = p.job;
+    if (j.t !== "route" && j.t !== "delay") return false;
+    const d = dist(p.x, p.y, S.ball.tx, S.ball.ty);
+    if (d > 11) return false;
+    setWant(p, S.ball.tx - p.x, S.ball.ty - p.y);
+    return true;
+  }
+
+  function dropbackAI(p, depth) {
+    {
+      const qb = p;
+      const home = { x: spot.x, y: Math.max(S.los - 5 - depth * 0.4, FIELD.ownGoal - 2) };
+      let ex = 0, ey = 0;
+      for (const q of P) {
+        if (q.side !== "def" || q.mot === "down" || q.eng >= 0) continue;
+        const d = dist(q.x, q.y, qb.x, qb.y);
+        if (d < 4.5) { ex += (qb.x - q.x) / (d || 1) * (4.5 - d); ey += (qb.y - q.y) / (d || 1) * (4.5 - d); }
+      }
+      const hx = home.x - qb.x, hy = home.y - qb.y;
+      const hl = Math.hypot(hx, hy);
+      const bx = (hl > 0.5 ? hx / hl * 0.6 : 0) + ex * 0.9;
+      const by = (hl > 0.5 ? hy / hl * 0.6 : 0) + ey * 0.9;
+      setWant(p, bx, by, (ex || ey) ? 0.9 : 0.5);
+    }
+  }
+
+  function driftOpen(p) {
+    let ax = 0, ay = 0;
+    for (const q of P) {
+      if (q.side !== "def" || q.mot === "down") continue;
+      const d = dist(p.x, p.y, q.x, q.y);
+      if (d < 7 && d > 0.01) { ax += (p.x - q.x) / d * (7 - d); ay += (p.y - q.y) / d * (7 - d); }
+    }
+    if (!ax && !ay) { ax = 0; ay = 1; }
+    if (p.x < 3) ax = Math.abs(ax) + 1;
+    if (p.x > FIELD.W - 3) ax = -Math.abs(ax) - 1;
+    setWant(p, ax, ay, 0.75);
+  }
+
+  function anchorAI(p) {
+    const q = P[p.eng];
+    if (!q) return;
+    setWant(p, q.x - S.ball.x, q.y - S.ball.y);
+  }
+
+  function protectAI(p) {
+    if (p.mot === "engaged") return anchorAI(p);
+    const qb = P[0];
+    const t = blockTarget(p, qb.x, qb.y);
+    if (!t) { setWant(p, qb.x - p.x, qb.y + 1.6 - p.y, 0.5); return; }
+    if (dist(p.x, p.y, t.x, t.y) < CFG.engageR) return engage(p, t);
+    const dx = qb.x - t.x, dy = qb.y - t.y, dl = Math.hypot(dx, dy) || 1;
+    setWant(p, t.x + dx / dl * 0.9 - p.x, t.y + dy / dl * 0.9 - p.y);
+  }
+
+  function runBlockAI(p, bias) {
+    if (p.mot === "engaged") return anchorAI(p);
+    const aimX = S.ball.x + bias * 4, aimY = S.ball.y + dirY() * 3;
+    const t = blockTarget(p, aimX, aimY);
+    if (!t || dist(t.x, t.y, aimX, aimY) > 14) { setWant(p, aimX - p.x, aimY - p.y, 0.8); return; }
+    if (dist(p.x, p.y, t.x, t.y) < CFG.engageR) return engage(p, t);
+    setWant(p, t.x + t.vx * 0.2 - p.x, t.y + t.vy * 0.2 - p.y);
+  }
+
+  function defenseAI(p) {
+    if (p.mot === "engaged") { setWant(p, S.ball.x - p.x, S.ball.y - p.y); return; }
+    if (ballIsRunning()) return pursue(p);
+    const j = p.job;
+
+    if (j.t === "rush" || j.t === "contain") {
+      const qb = carrier() || P[0];
+      const off = j.t === "contain" ? (j.side || 1) * 2.6 : 0;
+      setWant(p, qb.x + off - p.x, qb.y - 0.8 - p.y);
+      return;
+    }
+    if (j.t === "man") {
+      const t = P[j.i];
+      if (!t || t.mot === "down") return zoneAI(p, 0, 10, 10);
+      if (S.ball.state === "air" && dist(S.ball.tx, S.ball.ty, p.x, p.y) < 9) {
+        setWant(p, S.ball.tx - p.x, S.ball.ty - p.y);
+        return;
+      }
+      const lag = 0.06 * react;
+      const q = clamp(p.r.cov / 99, 0.2, 1);
+      const aimX = lerp(t.x, t.x + t.vx * lag, q);
+      const aimY = lerp(t.y, t.y + t.vy * lag - CFG.engageR, q);
+      setWant(p, aimX - p.x, aimY - p.y);
+      return;
+    }
+    if (j.t === "zone") return zoneAI(p, j.x, j.y, j.r);
+    if (j.t === "fill") {
+      const gx = spot.x + (j.bias || 0) * 5, gy = S.los + 1.5;
+      const dx = gx - p.x, dy = gy - p.y;
+      if (Math.hypot(dx, dy) < 1) { setWant(p, S.ball.x - p.x, S.ball.y - p.y, 0.4); return; }
+      setWant(p, dx, dy, 0.85);
+      return;
+    }
+    if (j.t === "spy") {
+      const qb = P[0];
+      setWant(p, qb.x - p.x, qb.y + 4 - p.y, 0.9);
+      return;
+    }
+    pursue(p);
+  }
+
+  function zoneAI(p, zx, zy, zr) {
+    const lx = clamp(spot.x + zx, 1, FIELD.W - 1);
+    const ly = clamp(S.los + zy * squeeze, 1, FIELD.oppGoal + 2);
+    if (S.ball.state === "air" && dist(S.ball.tx, S.ball.ty, lx, ly) < zr + 3) {
+      setWant(p, S.ball.tx - p.x, S.ball.ty - p.y);
+      return;
+    }
+    let threat = null, deepest = -Infinity;
+    for (const q of P) {
+      if (q.side !== "off" || (q.job.t !== "route" && q.job.t !== "delay")) continue;
+      if (dist(q.x, q.y, lx, ly) > zr) continue;
+      if (q.y > deepest) { deepest = q.y; threat = q; }
+    }
+    const tx = threat ? lerp(lx, threat.x, 0.55) : lx;
+    const ty = threat ? lerp(ly, threat.y, 0.55) : ly;
+    if (Math.hypot(tx - p.x, ty - p.y) < 0.8) return;
+    setWant(p, tx - p.x, ty - p.y, threat ? 1 : 0.8);
+  }
+
+  // ----- integration ---------------------------------------------------
+  function integrate(dt) {
+    for (const p of P) {
+      if (p.mot === "down" || p.mot === "set") { p.vx = p.vy = 0; continue; }
+      const top = speedOf(p);
+      const w = want[p.id];
+      const a = accelOf(p.r) * dt;
+      let dvx = w.x - p.vx, dvy = w.y - p.vy;
+      const dl = Math.hypot(dvx, dvy);
+      if (!w.x && !w.y) {
+        const damp = Math.max(0, 1 - 7 * dt);
+        p.vx *= damp; p.vy *= damp;
+      } else if (dl > a) { p.vx += dvx / dl * a; p.vy += dvy / dl * a; }
+      else { p.vx = w.x; p.vy = w.y; }
+
+      const sp = Math.hypot(p.vx, p.vy);
+      if (sp > top) { p.vx = p.vx / sp * top; p.vy = p.vy / sp * top; }
+
+      p.x = clamp(p.x + p.vx * dt, 0, FIELD.W);
+      p.y = clamp(p.y + p.vy * dt, 0, FIELD.L);
+
+      if (sp > 0.5) {
+        const target = Math.atan2(p.vy, p.vx);
+        let diff = target - p.face;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        p.face += clamp(diff, -turnOf(p.r) * dt, turnOf(p.r) * dt);
+      }
+
+      if (p.sprint && p.mot === "run") p.stamina = Math.max(0, p.stamina - 0.34 * dt);
+      else p.stamina = Math.min(1, p.stamina + 0.22 * dt);
+
+      p.timer = Math.max(0, p.timer - dt);
+      p.slowT = Math.max(0, p.slowT - dt);
+      p.immune = Math.max(0, p.immune - dt);
+      p.delay = Math.max(0, p.delay - dt);
+      if (p.mot === "stumble" && p.timer <= 0) p.mot = "run";
+    }
+    separate();
+  }
+
+  // Fourteen bodies, so an O(n²) push-apart is free and reads better than
+  // any spatial structure would.
+  function separate() {
+    const min = 0.8;
+    for (let i = 0; i < P.length; i++) {
+      if (P[i].mot === "down") continue;
+      for (let j = i + 1; j < P.length; j++) {
+        if (P[j].mot === "down") continue;
+        const dx = P[j].x - P[i].x, dy = P[j].y - P[i].y;
+        const d = Math.hypot(dx, dy);
+        if (d >= min || d < 1e-6) continue;
+        const push = (min - d) * 0.5;
+        const wi = P[i].r.pow, wj = P[j].r.pow, tot = wi + wj || 1;
+        P[i].x = clamp(P[i].x - dx / d * push * (2 * wj / tot), 0, FIELD.W);
+        P[i].y = clamp(P[i].y - dy / d * push * (2 * wj / tot), 0, FIELD.L);
+        P[j].x = clamp(P[j].x + dx / d * push * (2 * wi / tot), 0, FIELD.W);
+        P[j].y = clamp(P[j].y + dy / d * push * (2 * wi / tot), 0, FIELD.L);
+      }
+    }
+  }
+
+  function engagements(dt) {
+    for (const p of P) {
+      if (p.eng < 0) continue;
+      const q = P[p.eng];
+      if (!q || dist(p.x, p.y, q.x, q.y) > CFG.disengageR || q.mot === "down") { disengage(p); continue; }
+      if (p.side !== "off") continue;          // resolve each pair once
+      const edge = q.r.pow - p.r.blk;
+      q.shed += Math.max(0.05, CFG.shedRate + edge * CFG.shedRating) * dt;
+      if (q.shed >= 1) {
+        disengage(p);
+        q.immune = CFG.shedImmune; q.shed = 0;
+        p.mot = "stumble"; p.timer = 0.4;
+      }
+    }
+  }
+
+  function ballStep(dt) {
+    const b = S.ball;
+    if (b.state === "held") {
+      const c = P[b.who];
+      b.x = c.x; b.y = c.y; b.h = 0;
+      return;
+    }
+    if (b.state === "air") {
+      b.tt += dt;
+      const t = clamp(b.tt / b.dur, 0, 1);
+      b.x = lerp(b.fx, b.tx, t);
+      b.y = lerp(b.fy, b.ty, t);
+      b.h = b.apex * 4 * t * (1 - t);
+      if (b.tt >= b.dur) arrive();
+      return;
+    }
+    if (b.state === "loose") {
+      b.x = clamp(b.x + b.vx * dt, 0, FIELD.W);
+      b.y = clamp(b.y + b.vy * dt, 0, FIELD.L);
+      b.vx *= Math.max(0, 1 - 3.2 * dt); b.vy *= Math.max(0, 1 - 3.2 * dt);
+      b.timer -= dt;
+      let win = null, wd = 0.9;
+      for (const p of P) {
+        if (p.mot === "down") continue;
+        const d = dist(p.x, p.y, b.x, b.y);
+        if (d < wd) { wd = d; win = p; }
+      }
+      if (win) {
+        const mine = attacking(win);
+        win.hasBall = true;
+        S.ball = { state: "held", who: win.id, x: win.x, y: win.y, h: 0 };
+        if (mine) end("fumble-own", win.x, win.y, "FUMBLE — RECOVERED");
+        else { S.turnover = true; S.shake = 0.4; flipJobs(win); }
+        return;
+      }
+      if (b.timer <= 0 || b.x <= 0.2 || b.x >= FIELD.W - 0.2)
+        end("fumble-own", b.x, b.y, "FUMBLE — BALL DEAD");
+    }
+  }
+
+  function contact() {
+    const c = carrier();
+    if (!c || c.mot === "down") return;
+    for (const p of P) {
+      if (p === c || attacking(p) || p.mot === "down") continue;
+      // A blocked defender still occupies space. He cannot chase, but a runner
+      // who comes straight at him can still be dragged down — without this the
+      // offence carves a perfectly clean lane on every snap.
+      const blocked = p.eng >= 0;
+      const reach = blocked ? CFG.tackleR * CFG.blockedReach : CFG.tackleR;
+      if (dist(p.x, p.y, c.x, c.y) > reach) continue;
+      tackleTry(p, c, blocked ? CFG.blockedTackle : 1);
+      if (S.over || c.mot === "down") return;
+    }
+  }
+
+  function bounds() {
+    if (S.over) return;
+    const c = carrier();
+    if (!c || c.mot === "down") return;
+    const crossed = S.turnover ? c.y <= FIELD.ownGoal : c.y >= FIELD.oppGoal;
+    if (crossed) {
+      Sound.score();
+      return end(S.turnover ? (S.passAttempted && !S.completed ? "int-td" : "fumble-td") : "td",
+                 c.x, c.y, S.turnover ? "PICK SIX" : "TOUCHDOWN!");
+    }
+    if (c.x <= 0.15 || c.x >= FIELD.W - 0.15) {
+      c.mot = "down";
+      if (S.turnover) return end(S.passAttempted && !S.completed ? "int" : "fumble", c.x, c.y, "OUT OF BOUNDS");
+      return end("oob", c.x, c.y, "OUT AT " + gainLine(c.y - S.los).toLowerCase().toUpperCase());
+    }
+  }
+
+  // ----- the loop ------------------------------------------------------
+  S.tucked = false;
+  S.user = -1;
+
+  S.step = (dt, input) => {
+    if (S.over) return;
+    if (!S.snapped) { if (input.snap) S.snap(); return; }
+    S.t += dt;
+    S.shake = Math.max(0, S.shake - dt * 2.2);
+
+    if (S.handoffAt >= 0 && !S.handoffDone && S.t >= S.handoffAt) {
+      S.handoffDone = true;
+      const rb = P.find(p => p.job.t === "carry");
+      if (rb && S.ball.state === "held" && S.ball.who === 0) {
+        P[0].hasBall = false; rb.hasBall = true;
+        S.ball = { state: "held", who: rb.id, x: rb.x, y: rb.y, h: 0 };
+      }
+    }
+
+    if (input.tuck && S.qbHasIt()) S.tucked = true;
+    // Hold it too long and he pulls it down on his own.
+    if (!S.tucked && S.qbHasIt() && S.t > play.develop + 2.6) S.tucked = true;
+    if (S.windup >= 0) { S.windup -= dt; if (S.windup <= 0) release(); }
+    else if (input.throwTo) S.throwTo(input.throwTo.x, input.throwTo.y);
+
+    drive(dt, input);
+    integrate(dt);
+    engagements(dt);
+    ballStep(dt);
+    contact();
+    bounds();
+
+    if (!S.over && S.t > CFG.maxPlay) {
+      const c = carrier();
+      end("gain", c ? c.x : S.ball.x, c ? c.y : S.los, "WHISTLE");
+    }
+  };
+
+  return S;
+}
+
+/* ===================================================================
+   THE GAME — rules, drives, and the phase machine.
+
+   One coordinate frame for everything: you attack toward y = 110, they
+   attack toward y = 10. Nothing mirrors, so "the ball is on the 35"
+   means the same thing to the renderer, the rules and the drive sim.
+   =================================================================== */
+const G = {
+  st: null,
+  play: null,          // live PlaySimulation
+  banner: null,
+  bannerT: 0,
+};
+
+function newGame(myAb, oppAb) {
+  const seed = (Date.now() ^ (Math.random() * 0xffffffff)) >>> 0;
+  RNG = makeRNG(seed);
+  const my = teamBy(myAb), opp = teamBy(oppAb);
+  const qs = SETTINGS.quarter * 60;
+  const first = RNG.chance(0.5) ? "us" : "them";
+
+  G.st = {
+    seed,
+    my, opp,
+    myRoster: makeRoster(my, seed ^ 0x5f3a), oppRoster: makeRoster(opp, seed ^ 0x9c17),
+    q: 1, clock: qs, quarterLen: qs,
+    us: 0, them: 0,
+    poss: first,
+    down: 1, toGo: 10, los: 35, lineToGain: 45, ballX: FIELD.midY,
+    phase: "coin",
+    scheme: SCHEMES[0], chosen: null,
+    tryFor: null,          // 'us' while your extra point is pending
+    kick: null,            // live kick state
+    drive: null,           // opponent drive ticker
+    stats: {
+      us:   { plays: 0, yards: 0, first: 0, pass: 0, rush: 0, td: 0, to: 0, comp: 0, att: 0 },
+      them: { plays: 0, yards: 0, first: 0, pass: 0, rush: 0, td: 0, to: 0, comp: 0, att: 0 },
+    },
+    longestTD: 0,
+    log: [],
+  };
+  // Whoever wins the toss starts at their own 25.
+  if (first === "us") giveUs(FIELD.ownGoal + 25);
+  else startTheirDrive(FIELD.oppGoal - 25);
+  say(first === "us" ? "YOU RECEIVE" : (G.st.opp.ab + " RECEIVE"), 1.3);
+  return G.st;
+}
+
+function say(text, secs = 1.4, tone = "flood") {
+  G.banner = { text, tone };
+  G.bannerT = secs;
+}
+
+/* ---- spotting ---------------------------------------------------- */
+function giveUs(y) {
+  const s = G.st;
+  s.poss = "us";
+  s.los = clamp(y, FIELD.ownGoal + 0.5, FIELD.oppGoal - 0.5);
+  s.down = 1;
+  const toGoal = FIELD.oppGoal - s.los;
+  if (toGoal <= 10) { s.lineToGain = FIELD.oppGoal; s.toGo = toGoal; }
+  else { s.lineToGain = s.los + 10; s.toGo = 10; }
+  s.ballX = FIELD.midY;
+  s.phase = "playcall";
+  s.chosen = null;
+}
+
+function fieldLabel(y, forUs) {
+  const toGoal = forUs ? FIELD.oppGoal - y : y - FIELD.ownGoal;
+  if (toGoal <= 0) return "GOAL";
+  if (toGoal >= 100) return "OWN GOAL";
+  const n = toGoal > 50 ? Math.round(100 - toGoal) : Math.round(toGoal);
+  if (n === 50) return "MIDFIELD";
+  return (toGoal > 50 ? "OWN " : "OPP ") + n;
+}
+
+function downText() {
+  const s = G.st;
+  const ord = ["", "1ST", "2ND", "3RD", "4TH"][clamp(s.down, 0, 4)];
+  if (s.lineToGain >= FIELD.oppGoal - 0.01 && s.poss === "us") return ord + " & GOAL";
+  if (s.toGo < 1) return ord + " & INCHES";
+  return ord + " & " + Math.round(s.toGo);
+}
+
+const fgDistance = () => (FIELD.oppGoal - G.st.los) + 17;
+const inFGRange = () => fgDistance() <= 58;
+
+/* ---- clock ------------------------------------------------------- */
+function burn(seconds) {
+  const s = G.st;
+  s.clock -= seconds;
+  if (s.clock > 0) return false;
+  s.clock = 0;
+  return true;
+}
+
+function endOfQuarter() {
+  const s = G.st;
+  if (s.q >= 4) { finishGame(); return true; }
+  s.q++;
+  s.clock = s.quarterLen;
+  say("END OF QUARTER", 1.5);
+  Sound.horn();
+  return false;
+}
+
+function finishGame() {
+  const s = G.st;
+  s.phase = "final";
+  Sound.horn();
+  RECORD.played++;
+  if (s.us > s.them) RECORD.won++;
+  else if (s.us < s.them) RECORD.lost++;
+  else RECORD.tied++;
+  RECORD.best = Math.max(RECORD.best, s.us);
+  RECORD.longestTD = Math.max(RECORD.longestTD, s.longestTD);
+  saveRecord();
+}
+
+/* ---- applying your play ------------------------------------------ */
+function applyResult(res) {
+  const s = G.st, st = s.stats.us;
+  st.plays++;
+  if (res.pass) { st.att++; if (res.complete) { st.comp++; st.pass += res.yards; } }
+  else if (res.kind !== "sack") st.rush += res.yards;
+  if (res.kind !== "incomplete") st.yards += Math.max(0, res.yards);
+
+  const quarterOver = burn(res.elapsed + CFG.huddle);
+
+  switch (res.kind) {
+    case "td": {
+      s.us += 6; st.td++;
+      s.longestTD = Math.max(s.longestTD, Math.round(res.yards));
+      Sound.crowd();
+      say("TOUCHDOWN", 1.6, "good");
+      s.tryFor = "us";
+      s.phase = "try";
+      return;
+    }
+    case "safety":
+      s.them += 2; st.to++;
+      say("SAFETY", 1.6, "bad");
+      startTheirDrive(FIELD.oppGoal - 35);
+      break;
+    case "int": case "fumble":
+      st.to++;
+      say(res.headline, 1.6, "bad");
+      startTheirDrive(res.y);
+      break;
+    case "int-td": case "fumble-td":
+      st.to++;
+      s.them += 7;
+      say("PICK SIX", 1.8, "bad");
+      startTheirDrive(FIELD.oppGoal - 25, true);
+      break;
+    default: {
+      // Ordinary down.
+      const spot = clamp(res.y, FIELD.ownGoal + 0.5, FIELD.oppGoal - 0.5);
+      s.ballX = clamp(res.x, 4, FIELD.W - 4);
+      if (spot >= s.lineToGain - 0.01) {
+        st.first++;
+        Sound.first();
+        say("FIRST DOWN", 1.0, "flood");
+        giveUs(spot);
+        s.ballX = clamp(res.x, 4, FIELD.W - 4);
+      } else if (s.down >= 4) {
+        say("TURNOVER ON DOWNS", 1.6, "bad");
+        startTheirDrive(spot);
+      } else {
+        s.down++;
+        s.los = spot;
+        s.toGo = s.lineToGain - spot;
+        s.phase = "playcall";
+        s.chosen = null;
+      }
+    }
+  }
+  if (quarterOver && s.phase !== "final" && s.phase !== "try") endOfQuarter();
+}
+
+/* ---- the extra point --------------------------------------------- */
+function beginTry(twoPoint) {
+  const s = G.st;
+  if (twoPoint) {
+    s.tryFor = "us2";
+    giveUs(FIELD.oppGoal - 2);
+    s.down = 1; s.toGo = 2; s.lineToGain = FIELD.oppGoal;
+    s.phase = "playcall";
+  } else {
+    beginKick("xp");
+  }
+}
+
+function finishTry(good, points) {
+  const s = G.st;
+  if (good) { s.us += points; say(points === 2 ? "TWO POINTS" : "EXTRA POINT GOOD", 1.3, "good"); }
+  else say("NO GOOD", 1.3, "bad");
+  s.tryFor = null;
+  if (burn(6)) { if (endOfQuarter()) return; }
+  startTheirDrive(FIELD.oppGoal - 25);
+}
+
+/* ---- kicking ------------------------------------------------------ */
+function beginKick(kind) {
+  const s = G.st;
+  const dist = kind === "xp" ? 32 : fgDistance();
+  s.kick = {
+    kind, dist,
+    wind: RNG.range(-CFG.kickWindMax, CFG.kickWindMax),
+    aimX: 0, power: 0, charging: false, flight: null,
+    range: scaled(s.myRoster.k.r.pow, CFG.kickRangeMin, CFG.kickRangeMax),
+  };
+  s.phase = "kick";
+}
+
+function resolveKick(aimX, power) {
+  const s = G.st, k = s.kick;
+  // Wind pushes the ball; a steadier kicker holds his line better.
+  const steady = clamp(s.myRoster.k.r.awr / 99, 0.3, 1);
+  const drift = k.wind * (k.dist / 40) * (1.5 - steady);
+  const landX = aimX + drift;
+  const hasLeg = k.dist <= k.range * (0.55 + 0.5 * power);
+  const good = hasLeg && Math.abs(landX) <= 3.1;
+  k.flight = { t: 0, good, hasLeg, landX, power };
+  Sound.kick();
+  return good;
+}
+
+/* ---- the opponent's drive ----------------------------------------
+   You never play defense, so their possession is simulated and read
+   out a line at a time. It keeps a game to a handful of minutes and
+   keeps the thumb on the half of the game you actually control.
+   ------------------------------------------------------------------ */
+function startTheirDrive(startY, afterTheirScore = false) {
+  const s = G.st;
+  s.poss = "them";
+  s.phase = "defense";
+  s.los = clamp(startY, FIELD.ownGoal + 1, FIELD.oppGoal - 1);
+  s.down = 1; s.toGo = 10;
+  s.lineToGain = Math.max(FIELD.ownGoal, s.los - 10);
+  s.drive = { events: [], i: 0, timer: 0, done: false, over: false };
+  if (afterTheirScore) s.drive.pending = true;
+  simulateTheirDrive();
+}
+
+function simulateTheirDrive() {
+  const s = G.st, d = s.drive, rng = RNG;
+  const edge = (s.opp.str - s.my.str) * 0.012;      // their quality against yours
+  const diffBonus = (SETTINGS.diff - 1) * 0.03;
+  let los = s.los, down = 1, toGo = 10, guard = 0;
+
+  const toGoal = () => los - FIELD.ownGoal;
+
+  while (guard++ < 40) {
+    const deep = toGoal() <= 20;
+    const passing = down >= 3 ? toGo > 3 : rng.chance(0.52);
+    let line, yards = 0, over = false;
+
+    if (passing) {
+      const roll = rng.unit() + edge + diffBonus;
+      if (roll < 0.042) {
+        d.events.push({ text: "INTERCEPTED", los, kind: "turnover" });
+        d.endY = clamp(los + rng.range(-6, 14), FIELD.ownGoal + 1, FIELD.oppGoal - 1);
+        d.result = "turnover"; over = true;
+      } else if (roll < 0.17) {
+        yards = -rng.range(5, 9);
+        line = "SACKED FOR " + Math.round(-yards);
+      } else if (roll < 0.42) {
+        line = "PASS INCOMPLETE";
+      } else {
+        yards = rng.range(4, deep ? 10 : 18) * (0.85 + edge * 6);
+        line = "PASS FOR " + Math.round(yards);
+      }
+    } else {
+      const roll = rng.unit() + edge + diffBonus;
+      if (roll < 0.018) {
+        d.events.push({ text: "FUMBLE — YOU RECOVER", los, kind: "turnover" });
+        d.endY = clamp(los, FIELD.ownGoal + 1, FIELD.oppGoal - 1);
+        d.result = "turnover"; over = true;
+      } else {
+        yards = rng.range(-3, deep ? 7 : 12) * (0.9 + edge * 5);
+        line = "RUN FOR " + Math.round(yards);
+      }
+    }
+    if (over) break;
+
+    los = clamp(los - yards, FIELD.ownGoal - 2, FIELD.oppGoal);
+    if (line) d.events.push({ text: line, los, kind: "play" });
+
+    if (los <= FIELD.ownGoal) {
+      d.events.push({ text: s.opp.ab + " TOUCHDOWN", los: FIELD.ownGoal, kind: "td" });
+      d.result = "td"; break;
+    }
+    toGo -= yards;
+    if (toGo <= 0) { down = 1; toGo = 10; d.events.push({ text: "FIRST DOWN", los, kind: "first" }); }
+    else down++;
+
+    if (down > 4) {
+      const fg = (toGoal() + 17) <= 52;
+      if (fg && rng.chance(0.72 - toGoal() * 0.006)) {
+        d.events.push({ text: "FIELD GOAL IS GOOD", los, kind: "fg" });
+        d.result = "fg"; break;
+      }
+      if (fg) { d.events.push({ text: "FIELD GOAL MISSED", los, kind: "miss" });
+                d.result = "miss"; d.endY = clamp(los + 7, FIELD.ownGoal + 1, FIELD.oppGoal - 1); break; }
+      const punt = rng.range(34, 52);
+      const land = clamp(los + punt, FIELD.ownGoal + 1, FIELD.oppGoal + 8);
+      d.events.push({ text: "PUNT — " + Math.round(punt) + " YARDS", los, kind: "punt" });
+      d.result = "punt";
+      d.endY = land >= FIELD.oppGoal ? FIELD.oppGoal - 20 : land;
+      break;
+    }
+  }
+  if (!d.result) { d.result = "punt"; d.endY = clamp(los + 40, FIELD.ownGoal + 1, FIELD.oppGoal - 20); }
+  d.events.push({ text: "", los, kind: "end" });
+}
+
+function advanceTheirDrive() {
+  const s = G.st, d = s.drive;
+  if (!d) return;
+  const ev = d.events[d.i];
+  if (!ev) return finishTheirDrive();
+  s.los = clamp(ev.los, 0, FIELD.L);
+  if (ev.kind === "td") { s.them += 7; s.stats.them.td++; Sound.bad(); }
+  if (ev.kind === "fg") { s.them += 3; Sound.bad(); }
+  if (ev.kind === "first") s.stats.them.first++;
+  if (ev.kind === "play") s.stats.them.plays++;
+  if (ev.text) s.log.push(ev.text);
+  d.i++;
+  const isSnap = ev.kind !== "first" && ev.kind !== "end";
+  if (isSnap && burn(CFG.simPlaySeconds)) { d.clockOut = true; }
+  if (d.i >= d.events.length || d.clockOut) finishTheirDrive();
+}
+
+function finishTheirDrive() {
+  const s = G.st, d = s.drive;
+  if (d.clockOut) {
+    const gameOver = endOfQuarter();
+    if (gameOver || s.phase === "final") { s.drive = null; return; }
+    // A drive that runs into the end of a quarter continues in the next one.
+    // Throwing it away is why the opponent used to never score.
+    if (d.i < d.events.length) { d.clockOut = false; return; }
+  }
+  s.drive = null;
+  if (s.phase === "final") return;
+  const r = d.result;
+  if (r === "td" || r === "fg") { giveUs(FIELD.ownGoal + 25); say("YOUR BALL", 1.0); return; }
+  giveUs(d.endY != null ? d.endY : FIELD.ownGoal + 25);
+  say("YOUR BALL", 1.0);
+}
+
+/* ---- starting a snap ---------------------------------------------- */
+function snapPlay(play) {
+  const s = G.st;
+  s.chosen = play;
+  s.scheme = callScheme({ down: s.down, toGo: s.toGo, los: s.los, q: s.q,
+                          clock: s.clock, us: s.us, them: s.them }, RNG);
+  G.play = makePlay({
+    play, scheme: s.scheme,
+    los: s.los, ballX: s.ballX, lineToGain: s.lineToGain,
+    offense: s.myRoster, defense: s.oppRoster,
+    seed: RNG.next(),
+  });
+  s.phase = "presnap";
+}
+
+function punt() {
+  const s = G.st;
+  const power = scaled(s.myRoster.k.r.pow, 34, 54);
+  const land = clamp(s.los + power + RNG.range(-5, 6), 0, FIELD.L);
+  Sound.kick();
+  say("PUNT", 1.2);
+  burn(8);
+  startTheirDrive(land >= FIELD.oppGoal ? FIELD.oppGoal - 20 : land);
+}
+
+/* ===================================================================
+   RENDER — everything is drawn in art pixels and blitted at an integer
+   scale, which is what keeps the sprites from shimmering on a phone.
+   =================================================================== */
+const COL = {
+  night: "#0E141A", night2: "#141C24", panel: "#1A242E", panelHi: "#22303C",
+  edge: "#2B3A47", turf: "#2E6B3A", mow: "#276033", turfDark: "#20512A",
+  chalk: "#E8EFE4", chalkDim: "#9FB3A4", flood: "#F5C542", ink: "#E6EDF2",
+  dim: "#8296A3", good: "#5FD07A", bad: "#D9453C", shadow: "rgba(0,0,0,.35)",
+};
+
+const cv = document.getElementById("screen");
+const ctx = cv.getContext("2d", { alpha: false });
+let UNIT = 3, ARTW = 176, ARTH = 320, PPY = 6, VIEWTOP = 0, VIEWH = 0;
+let fieldCv = null, fieldKey = "";
+
+function resize() {
+  const shell = document.getElementById("shell");
+  const cssW = shell.clientWidth, cssH = shell.clientHeight;
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+
+  // A phone-shaped surface: full bleed on a phone, a device panel on a desktop.
+  const maxW = Math.min(cssW, Math.max(320, cssH * 0.52));
+  const useW = Math.floor(maxW), useH = Math.floor(cssH);
+
+  UNIT = Math.max(2, Math.round(useW * dpr / CFG.artW));
+  ARTW = Math.floor(useW * dpr / UNIT);
+  ARTH = Math.floor(useH * dpr / UNIT);
+
+  cv.width = ARTW * UNIT;
+  cv.height = ARTH * UNIT;
+  cv.style.width = (cv.width / dpr) + "px";
+  cv.style.height = (cv.height / dpr) + "px";
+  ctx.imageSmoothingEnabled = false;
+
+  PPY = ARTW / FIELD.W;
+  VIEWTOP = 20;                      // the scoreboard strip
+  VIEWH = ARTH - VIEWTOP;
+  fieldKey = "";                     // force a field rebuild at the new scale
+  textCache.clear();
+  spriteCache.clear();
+}
+window.addEventListener("resize", resize);
+
+/* ---- text -------------------------------------------------------- */
+const textCache = new Map();
+function textCanvas(str, color) {
+  const key = str + "|" + color;
+  let hit = textCache.get(key);
+  if (hit) return hit;
+  const w = Math.max(1, textW(str)), h = GH;
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const g = c.getContext("2d");
+  g.fillStyle = color;
+  let ox = 0;
+  for (const ch of str) {
+    const rows = glyphRows(ch);
+    for (let y = 0; y < GH; y++) {
+      const row = rows[y];
+      for (let x = 0; x < GW; x++) if (row[x] === "#") g.fillRect(ox + x, y, 1, 1);
+    }
+    ox += GW + TRACK;
+  }
+  if (textCache.size > 400) textCache.clear();
+  textCache.set(key, c);
+  return c;
+}
+// x, y in art pixels. align: -1 left, 0 centre, 1 right.
+function text(str, x, y, { scale = 1, color = COL.ink, align = 0, shadow = true } = {}) {
+  if (!str) return;
+  const c = textCanvas(str, color);
+  const w = c.width * scale, h = c.height * scale;
+  const px = Math.round(align < 0 ? x : align > 0 ? x - w : x - w / 2);
+  const py = Math.round(y);
+  if (shadow) {
+    const sc = textCanvas(str, "#080B0E");
+    ctx.drawImage(sc, 0, 0, sc.width, sc.height,
+                  (px + 1) * UNIT, (py + 1) * UNIT, w * UNIT, h * UNIT);
+  }
+  ctx.drawImage(c, 0, 0, c.width, c.height, px * UNIT, py * UNIT, w * UNIT, h * UNIT);
+}
+const rect = (x, y, w, h, col) => {
+  ctx.fillStyle = col;
+  ctx.fillRect(Math.round(x) * UNIT, Math.round(y) * UNIT, Math.round(w) * UNIT, Math.round(h) * UNIT);
+};
+function panel(x, y, w, h, fill = COL.panel, edge = COL.edge) {
+  rect(x - 1, y - 1, w + 2, h + 2, edge);
+  rect(x, y, w, h, fill);
+}
+
+/* ---- the field, baked once --------------------------------------- */
+function buildField() {
+  const key = G.st.my.ab + G.st.opp.ab + "|" + ARTW + "|" + UNIT;
+  if (fieldKey === key) return;
+  fieldKey = key;
+
+  const w = ARTW, h = Math.ceil(FIELD.L * PPY);
+  fieldCv = document.createElement("canvas");
+  fieldCv.width = w * UNIT; fieldCv.height = h * UNIT;
+  const g = fieldCv.getContext("2d");
+  g.imageSmoothingEnabled = false;
+  const R = (x, y, ww, hh, c) => { g.fillStyle = c; g.fillRect(Math.round(x) * UNIT, Math.round(y) * UNIT, Math.max(1, Math.round(ww)) * UNIT, Math.max(1, Math.round(hh)) * UNIT); };
+  const Y = fy => (FIELD.L - fy) * PPY;   // field yards → canvas row
+
+  R(0, 0, w, h, COL.turf);
+  // Mow stripes every five yards between the goal lines.
+  for (let y = FIELD.ownGoal; y < FIELD.oppGoal; y += 10)
+    R(0, Y(y + 5), w, 5 * PPY, COL.mow);
+
+  // End zones in team colours: yours at the bottom, theirs at the top.
+  R(0, Y(FIELD.L), w, FIELD.EZ * PPY, G.st.opp.jersey);
+  R(0, Y(FIELD.ownGoal), w, FIELD.EZ * PPY, G.st.my.jersey);
+
+  // End-zone lettering, rotated to run across the back of each zone.
+  const nameFor = (t, y, up) => {
+    const c = textCanvas(t.nick.slice(0, 10), t.trim);
+    const scale = Math.max(1, Math.floor(w / (c.width + 8)));
+    const dw = c.width * scale, dh = c.height * scale;
+    g.save();
+    g.translate(w * UNIT / 2, (y + (up ? -1 : 1) * 0) * UNIT);
+    g.rotate(up ? 0 : Math.PI);
+    g.drawImage(c, 0, 0, c.width, c.height, -dw * UNIT / 2, -dh * UNIT / 2, dw * UNIT, dh * UNIT);
+    g.restore();
+  };
+  nameFor(G.st.opp, Y(FIELD.oppGoal + FIELD.EZ / 2), false);
+  nameFor(G.st.my, Y(FIELD.ownGoal - FIELD.EZ / 2), true);
+
+  const thick = Math.max(1, Math.round(PPY * 0.28));
+  for (let y = FIELD.ownGoal; y <= FIELD.oppGoal + 0.01; y += 5) {
+    const goal = (y === FIELD.ownGoal || y === FIELD.oppGoal);
+    R(0, Y(y) - (goal ? thick : thick / 2), w, goal ? thick * 2 : thick, COL.chalk);
+  }
+  // Hash marks, one per yard.
+  for (let y = FIELD.ownGoal + 1; y < FIELD.oppGoal; y++) {
+    if (y % 5 === 0) continue;
+    R(FIELD.W * 0.36 * PPY, Y(y), 1.4 * PPY, 1, COL.chalkDim);
+    R(FIELD.W * 0.64 * PPY, Y(y), 1.4 * PPY, 1, COL.chalkDim);
+  }
+  // Painted numbers down both sidelines.
+  for (let y = FIELD.ownGoal + 10; y <= FIELD.oppGoal - 10; y += 10) {
+    const toGoal = FIELD.oppGoal - y;
+    const n = String(toGoal > 50 ? 100 - toGoal : toGoal);
+    const c = textCanvas(n, COL.chalkDim);
+    const s = Math.max(1, Math.round(PPY * 0.55));
+    g.drawImage(c, 0, 0, c.width, c.height,
+                Math.round(2.6 * PPY) * UNIT, Math.round(Y(y) - c.height * s / 2) * UNIT,
+                c.width * s * UNIT, c.height * s * UNIT);
+    g.drawImage(c, 0, 0, c.width, c.height,
+                Math.round(FIELD.W * PPY - 2.6 * PPY - c.width * s) * UNIT,
+                Math.round(Y(y) - c.height * s / 2) * UNIT,
+                c.width * s * UNIT, c.height * s * UNIT);
+  }
+  // Sidelines.
+  R(0, 0, 1, h, COL.chalk);
+  R(w - 1, 0, 1, h, COL.chalk);
+}
+
+/* ---- camera ------------------------------------------------------ */
+let camY = 0;
+function focusY() {
+  const s = G.st;
+  if (G.play && !G.play.over) {
+    const c = G.play.ball;
+    return c.y + (G.play.ball.state === "held" ? 3 : 0);
+  }
+  return s.los + 6;
+}
+function updateCamera(dt, snap) {
+  const fieldH = FIELD.L * PPY;
+  const target = clamp((FIELD.L - focusY()) * PPY - VIEWH * 0.62, 0, Math.max(0, fieldH - VIEWH));
+  if (snap) camY = target;
+  else camY += (target - camY) * (1 - Math.pow(0.002, dt));
+}
+const sx = fx => fx * PPY;
+const sy = fy => VIEWTOP + (FIELD.L - fy) * PPY - camY;
+
+/* ---- the play ---------------------------------------------------- */
+function drawField() {
+  const shake = G.play ? G.play.shake : 0;
+  const ox = shake > 0 ? Math.round((Math.random() - 0.5) * shake * 6) : 0;
+  const oy = shake > 0 ? Math.round((Math.random() - 0.5) * shake * 6) : 0;
+  ctx.drawImage(fieldCv, 0, Math.round((camY - oy)) * UNIT, ARTW * UNIT, VIEWH * UNIT,
+                ox * UNIT, VIEWTOP * UNIT, ARTW * UNIT, VIEWH * UNIT);
+}
+
+function drawLines() {
+  const s = G.st;
+  if (s.phase === "defense" || s.phase === "final") return;
+  const losY = sy(s.los);
+  if (losY > VIEWTOP - 4 && losY < ARTH + 4) rect(0, losY, ARTW, 1, "#7FB6E8");
+  if (s.poss === "us" && s.lineToGain < FIELD.oppGoal - 0.01) {
+    const gy = sy(s.lineToGain);
+    if (gy > VIEWTOP - 4 && gy < ARTH + 4) rect(0, gy, ARTW, 1, COL.flood);
+  }
+}
+
+function drawPlayers() {
+  const sim = G.play;
+  if (!sim) return;
+  const order = sim.P.slice().sort((a, b) => b.y - a.y);   // nearer players on top
+  for (const p of order) {
+    const team = p.side === "off" ? G.st.my : G.st.opp;
+    const frame = p.mot === "down" ? "down"
+      : p.mot === "engaged" ? "block"
+      : (Math.hypot(p.vx, p.vy) > 0.6 && Math.floor(sim.t * 9) % 2 === 0) ? "run1" : "run2";
+    const sp = sprite(frame, team, UNIT);
+    const px = Math.round(sx(p.x) - sp.w / 2);
+    const py = Math.round(sy(p.y) - sp.h + 2);
+    if (py < VIEWTOP - 20 || py > ARTH + 6) continue;
+
+    // A soft shadow so bodies sit on the turf instead of floating.
+    ctx.fillStyle = COL.shadow;
+    ctx.fillRect(Math.round(sx(p.x) - 3) * UNIT, Math.round(sy(p.y) - 1) * UNIT, 6 * UNIT, 2 * UNIT);
+    ctx.drawImage(sp.canvas, px * UNIT, py * UNIT, sp.w * UNIT, sp.h * UNIT);
+
+    if (p.id === sim.user && p.mot !== "down") rect(sx(p.x) - 4, sy(p.y) + 1, 8, 1, COL.flood);
+    if (p.hasBall && p.mot !== "down") {
+      const b = ballSprite(UNIT);
+      ctx.drawImage(b.canvas, Math.round(sx(p.x) + 3) * UNIT, Math.round(sy(p.y) - 8) * UNIT,
+                    b.w * UNIT, b.h * UNIT);
+    }
+  }
+
+  // Receiver markers while you still have a throw available.
+  if (sim.qbHasIt() && !sim.tucked) {
+    for (const r of sim.targets()) {
+      rect(sx(r.x) - 1, sy(r.y) - sprite("run2", G.st.my, UNIT).h - 3, 3, 3, G.st.my.trim);
+    }
+  }
+
+  const b = sim.ball;
+  if (b.state === "air" || b.state === "loose") {
+    const bs = ballSprite(UNIT);
+    const lift = b.h * PPY * 0.9;
+    ctx.fillStyle = COL.shadow;
+    ctx.fillRect(Math.round(sx(b.x) - 2) * UNIT, Math.round(sy(b.y) - 1) * UNIT, 4 * UNIT, 2 * UNIT);
+    ctx.drawImage(bs.canvas, Math.round(sx(b.x) - bs.w / 2) * UNIT,
+                  Math.round(sy(b.y) - lift - bs.h) * UNIT, bs.w * UNIT, bs.h * UNIT);
+  }
+}
+
+function drawAim() {
+  const sim = G.play, aim = Input.aim;
+  if (!sim || !aim || !sim.qbHasIt() || sim.tucked) return;
+  const qb = sim.P[0];
+  const ax = sx(aim.x), ay = sy(aim.y);
+  // Dotted line from the arm to the spot, then a crosshair on the spot.
+  const steps = 12;
+  for (let i = 2; i <= steps; i++) {
+    const t = i / steps;
+    rect(lerp(sx(qb.x), ax, t) - 0.5, lerp(sy(qb.y), ay, t) - 0.5, 1, 1,
+         i % 2 ? COL.flood : "#7A6320");
+  }
+  rect(ax - 5, ay, 4, 1, COL.flood); rect(ax + 2, ay, 4, 1, COL.flood);
+  rect(ax, ay - 5, 1, 4, COL.flood); rect(ax, ay + 2, 1, 4, COL.flood);
+  rect(ax - 1, ay - 1, 3, 3, COL.flood);
+}
+
+/* ---- HUD --------------------------------------------------------- */
+function drawHUD() {
+  const s = G.st;
+  rect(0, 0, ARTW, VIEWTOP, COL.night2);
+  rect(0, VIEWTOP - 1, ARTW, 1, COL.edge);
+
+  rect(2, 3, 3, 8, s.my.trim);
+  text(s.my.ab, 7, 3, { align: -1, scale: 1, color: COL.ink });
+  text(String(s.us), 7, 11, { align: -1, scale: 1, color: COL.flood });
+
+  rect(ARTW - 5, 3, 3, 8, s.opp.trim);
+  text(s.opp.ab, ARTW - 7, 3, { align: 1, scale: 1, color: COL.ink });
+  text(String(s.them), ARTW - 7, 11, { align: 1, scale: 1, color: COL.flood });
+
+  const m = Math.max(0, Math.ceil(s.clock));
+  const clock = Math.floor(m / 60) + ":" + String(m % 60).padStart(2, "0");
+  text(clock, ARTW / 2, 2, { scale: 1, color: COL.ink });
+  const qLabel = ["", "1ST", "2ND", "3RD", "4TH"][clamp(s.q, 0, 4)];
+  const line = s.poss === "us" ? qLabel + "  " + downText() + "  " + fieldLabel(s.los, true)
+                               : qLabel + "  " + s.opp.ab + " BALL";
+  text(line, ARTW / 2, 11, { scale: 1, color: COL.dim });
+}
+
+function drawBanner() {
+  if (!G.banner || G.bannerT <= 0) return;
+  const t = G.banner;
+  const col = t.tone === "good" ? COL.good : t.tone === "bad" ? COL.bad : COL.flood;
+  const w = textW(t.text) * 2 + 16;
+  const y = Math.round(VIEWTOP + VIEWH * 0.34);
+  panel(ARTW / 2 - w / 2, y, w, 20, COL.night, col);
+  text(t.text, ARTW / 2, y + 6, { scale: 2, color: col });
+}
+
+/* ===================================================================
+   IMMEDIATE-MODE UI — panels register their hit boxes as they draw, so
+   the layout lives in exactly one place instead of two that drift.
+   =================================================================== */
+let HOT = [];
+function button(id, x, y, w, h, label, opt = {}) {
+  HOT.push({ id, x, y, w, h });
+  const active = Input.holdId === id;
+  panel(x, y + (active ? 1 : 0), w, h,
+        opt.primary ? (active ? "#FFD86B" : COL.flood) : (active ? COL.panelHi : COL.panel),
+        opt.edge || (opt.primary ? "#8A6C18" : COL.edge));
+  text(label, x + w / 2, y + (h - GH * (opt.scale || 1)) / 2 + (active ? 1 : 0),
+       { scale: opt.scale || 1, color: opt.primary ? "#16202A" : (opt.color || COL.ink), shadow: !opt.primary });
+  if (opt.sub) text(opt.sub, x + w / 2, y + h - 8, { scale: 1, color: opt.primary ? "#4A3B0C" : COL.dim, shadow: false });
+}
+const hitTest = (x, y) => HOT.find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+
+/* ---- play call ---------------------------------------------------- */
+function drawPlayCall() {
+  const s = G.st;
+  const fourth = s.down === 4 && s.tryFor !== "us2";
+  const extra = fourth ? 22 : 0;
+  const h = 78 + extra;
+  const y0 = ARTH - h;
+  panel(0, y0, ARTW, h, COL.night2, COL.edge);
+
+  text(downText() + "  ·  " + fieldLabel(s.los, true), ARTW / 2, y0 + 4, { scale: 1, color: COL.flood });
+
+  const m = 6, gap = 4, cols = 3;
+  const cw = Math.floor((ARTW - m * 2 - gap * (cols - 1)) / cols), ch = 26;
+  PLAYS.forEach((p, i) => {
+    const cx = m + (i % cols) * (cw + gap);
+    const cy = y0 + 14 + Math.floor(i / cols) * (ch + gap);
+    button("play:" + p.id, cx, cy, cw, ch, p.name, { sub: p.tag, scale: 1 });
+  });
+
+  if (fourth) {
+    const by = y0 + 14 + 2 * (ch + gap);
+    const bw = Math.floor((ARTW - m * 2 - gap) / 2);
+    button("punt", m, by, bw, 18, "PUNT", { scale: 1 });
+    if (inFGRange())
+      button("fg", m + bw + gap, by, bw, 18, "FIELD GOAL " + Math.round(fgDistance()), { scale: 1, primary: true });
+    else
+      button("nofg", m + bw + gap, by, bw, 18, "OUT OF RANGE", { scale: 1, color: COL.dim });
+  }
+}
+
+function drawPresnap() {
+  const s = G.st;
+  text("TAP TO SNAP", ARTW / 2, ARTH - 30, { scale: 2, color: COL.flood });
+  text(s.chosen.name + "  vs  " + s.scheme.name, ARTW / 2, ARTH - 14, { scale: 1, color: COL.dim });
+}
+
+function drawLiveControls() {
+  const sim = G.play;
+  if (!sim || sim.over) return;
+  if (sim.qbHasIt() && !sim.tucked) {
+    button("tuck", ARTW - 44, ARTH - 26, 38, 20, "RUN", { scale: 1 });
+    if (!Input.aim) text("DRAG TO AIM", ARTW / 2 - 20, ARTH - 20, { scale: 1, color: COL.dim });
+  }
+}
+
+/* ---- the try ------------------------------------------------------ */
+function drawTry() {
+  const y0 = ARTH - 56;
+  panel(0, y0, ARTW, 56, COL.night2, COL.edge);
+  text("TOUCHDOWN — TAKE YOUR POINTS", ARTW / 2, y0 + 5, { scale: 1, color: COL.flood });
+  const m = 8, gap = 6, bw = Math.floor((ARTW - m * 2 - gap) / 2);
+  button("xp", m, y0 + 16, bw, 30, "KICK", { sub: "1 POINT", primary: true, scale: 2 });
+  button("two", m + bw + gap, y0 + 16, bw, 30, "GO FOR 2", { sub: "FROM THE 2", scale: 1 });
+}
+
+/* ---- kicking ------------------------------------------------------ */
+function drawKick() {
+  const s = G.st, k = s.kick;
+  const cx = ARTW / 2, base = VIEWTOP + VIEWH * 0.72;
+
+  if (!k.flight) {
+    const w = k.wind;
+    const arrow = w > 0.15 ? "▲" : w < -0.15 ? "▼" : "·";
+    text("WIND " + arrow + " " + Math.abs(w).toFixed(1), ARTW / 2, VIEWTOP + 8,
+         { scale: 1, color: Math.abs(w) > 1.2 ? COL.bad : COL.dim });
+    text((k.kind === "xp" ? "EXTRA POINT" : Math.round(k.dist) + " YARDS"), ARTW / 2, VIEWTOP + 18,
+         { scale: 2, color: COL.flood });
+
+    // The uprights, drawn where the ball has to go.
+    const gy = VIEWTOP + 26;
+    rect(cx - 22, gy + 10, 44, 1, COL.chalk);
+    rect(cx - 22, gy, 1, 12, COL.flood);
+    rect(cx + 21, gy, 1, 12, COL.flood);
+
+    if (Input.down) {
+      const dx = (Input.x - Input.sx), dy = Math.max(0, Input.y - Input.sy);
+      const power = clamp(dy / 60, 0, 1);
+      const aim = clamp(-dx / 8, -8, 8);
+      k.aimX = aim; k.power = power;
+      // Live preview of the flight, so the swipe teaches itself.
+      for (let i = 1; i <= 10; i++) {
+        const t = i / 10;
+        const px = lerp(cx, cx + aim * 2.6, t);
+        const py = lerp(base, gy + 6, t) - Math.sin(t * Math.PI) * 12 * power;
+        rect(px - 0.5, py - 0.5, 1, 1, i % 2 ? COL.flood : "#7A6320");
+      }
+      rect(cx - 30, base + 12, 60, 4, COL.panel);
+      rect(cx - 30, base + 12, 60 * power, 4, power > 0.85 ? COL.bad : COL.flood);
+      text("RELEASE TO KICK", ARTW / 2, base + 22, { scale: 1, color: COL.dim });
+    } else {
+      text("DRAG DOWN AND RELEASE", ARTW / 2, base + 16, { scale: 1, color: COL.dim });
+      text("AIM WITH THE SWIPE", ARTW / 2, base + 26, { scale: 1, color: COL.dim });
+    }
+    const b = ballSprite(UNIT);
+    ctx.drawImage(b.canvas, Math.round(cx - b.w / 2) * UNIT, Math.round(base) * UNIT, b.w * UNIT, b.h * UNIT);
+  } else {
+    const f = k.flight, gy = VIEWTOP + 26;
+    const t = clamp(f.t / 0.9, 0, 1);
+    const px = lerp(cx, cx + f.landX * 3.4, t);
+    const py = lerp(base, gy + 6, t) - Math.sin(t * Math.PI) * 14;
+    rect(cx - 22, gy + 10, 44, 1, COL.chalk);
+    rect(cx - 22, gy, 1, 12, COL.flood);
+    rect(cx + 21, gy, 1, 12, COL.flood);
+    const b = ballSprite(UNIT);
+    ctx.drawImage(b.canvas, Math.round(px - b.w / 2) * UNIT, Math.round(py) * UNIT, b.w * UNIT, b.h * UNIT);
+    if (t >= 1) text(f.good ? "GOOD" : (f.hasLeg ? "WIDE" : "SHORT"), ARTW / 2, base + 10,
+                     { scale: 2, color: f.good ? COL.good : COL.bad });
+  }
+}
+
+/* ---- their drive --------------------------------------------------- */
+function drawDefense() {
+  const s = G.st, d = s.drive;
+  rect(0, VIEWTOP, ARTW, VIEWH, "rgba(8,11,14,.62)");
+  const h = 96, y0 = VIEWTOP + Math.round((VIEWH - h) / 2);
+  panel(8, y0, ARTW - 16, h, COL.night2, COL.edge);
+  text(s.opp.city, ARTW / 2, y0 + 6, { scale: 1, color: s.opp.trim });
+  text("HAVE THE BALL", ARTW / 2, y0 + 15, { scale: 1, color: COL.dim });
+
+  // A strip of field with their position on it — the whole drive at a glance.
+  const bx = 14, bw = ARTW - 28, by = y0 + 26;
+  rect(bx, by, bw, 8, COL.turfDark);
+  rect(bx, by, bw * (FIELD.EZ / FIELD.L), 8, G.st.my.jersey);
+  rect(bx + bw * (1 - FIELD.EZ / FIELD.L), by, bw * (FIELD.EZ / FIELD.L), 8, G.st.opp.jersey);
+  const px = bx + bw * clamp(s.los / FIELD.L, 0, 1);
+  rect(px - 1, by - 2, 2, 12, COL.flood);
+  text("YOUR GOAL", bx, by + 12, { align: -1, scale: 1, color: COL.dim });
+  text(fieldLabel(s.los, false), bx + bw, by + 12, { align: 1, scale: 1, color: COL.ink });
+
+  const lines = s.log.slice(-4);
+  lines.forEach((l, i) => {
+    const last = i === lines.length - 1;
+    text(l, ARTW / 2, y0 + 46 + i * 10, { scale: 1, color: last ? COL.ink : COL.dim });
+  });
+
+  button("advance", ARTW / 2 - 46, y0 + h - 22, 92, 16,
+         d && d.i < d.events.length ? "NEXT PLAY" : "CONTINUE", { primary: true });
+}
+
+/* ---- screens ------------------------------------------------------- */
+function drawTitle() {
+  rect(0, 0, ARTW, ARTH, COL.night);
+  for (let i = 0; i < 6; i++) rect(0, 40 + i * 26, ARTW, 12, i % 2 ? COL.night2 : "#111A22");
+  text("PIXEL", ARTW / 2, 34, { scale: 4, color: COL.chalk });
+  text("BOWL", ARTW / 2, 66, { scale: 4, color: COL.flood });
+  text("FOUR DOWNS · ONE THUMB", ARTW / 2, 96, { scale: 1, color: COL.dim });
+
+  const bw = ARTW - 48;
+  button("start", 24, 130, bw, 26, "PLAY", { primary: true, scale: 2 });
+  button("diff", 24, 164, bw, 20, "DIFFICULTY  " + DIFFS[SETTINGS.diff].name, { scale: 1 });
+  button("qlen", 24, 190, bw, 20, "QUARTER  " + SETTINGS.quarter + " MIN", { scale: 1 });
+  button("sfx", 24, 216, bw, 20, "SOUND  " + (SETTINGS.sound ? "ON" : "OFF"), { scale: 1 });
+
+  const rec = RECORD.played
+    ? RECORD.won + "-" + RECORD.lost + (RECORD.tied ? "-" + RECORD.tied : "") + "   BEST " + RECORD.best
+    : "NO GAMES PLAYED YET";
+  text(rec, ARTW / 2, ARTH - 26, { scale: 1, color: COL.dim });
+  text("DRAG TO AIM · RELEASE TO THROW", ARTW / 2, ARTH - 14, { scale: 1, color: "#5D707D" });
+}
+
+function drawTeams() {
+  rect(0, 0, ARTW, ARTH, COL.night);
+  text(PICK.forOpponent ? "PICK OPPONENT" : "PICK YOUR TEAM", ARTW / 2, 16, { scale: 2, color: COL.flood });
+  text(PICK.forOpponent ? PICK.mine.city + " HOST" : "THE BAR IS TEAM STRENGTH",
+       ARTW / 2, 34, { scale: 1, color: COL.dim });
+
+  const list = TEAMS.filter(t => !PICK.forOpponent || t.ab !== PICK.mine.ab);
+  const cols = 2, m = 10, gap = 6;
+  const cw = Math.floor((ARTW - m * 2 - gap) / cols), ch = 34;
+  list.forEach((t, i) => {
+    const x = m + (i % cols) * (cw + gap);
+    const y = 48 + Math.floor(i / cols) * (ch + gap);
+    HOT.push({ id: "team:" + t.ab, x, y, w: cw, h: ch });
+    panel(x, y, cw, ch, t.jersey, COL.edge);
+    rect(x, y, cw, 3, t.trim);
+    text(t.ab, x + cw / 2, y + 7, { scale: 2, color: t.trim });
+    text(t.nick.slice(0, 11), x + cw / 2, y + 22, { scale: 1, color: COL.ink });
+    const bars = clamp(Math.round((t.str + 8) / 16 * 5), 0, 5);
+    for (let b = 0; b < 5; b++)
+      rect(x + cw / 2 - 11 + b * 5, y + ch - 6, 3, 2, b < bars ? COL.flood : "#33414C");
+  });
+  button("back", ARTW / 2 - 30, ARTH - 24, 60, 16, "BACK", { scale: 1 });
+}
+
+function drawFinal() {
+  const s = G.st;
+  rect(0, VIEWTOP, ARTW, VIEWH, "rgba(8,11,14,.82)");
+  const win = s.us > s.them, tie = s.us === s.them;
+  text(tie ? "TIE GAME" : win ? "YOU WIN" : "YOU LOSE", ARTW / 2, VIEWTOP + 16,
+       { scale: 3, color: tie ? COL.flood : win ? COL.good : COL.bad });
+  text(s.my.ab + "  " + s.us + "   -   " + s.them + "  " + s.opp.ab, ARTW / 2, VIEWTOP + 42,
+       { scale: 2, color: COL.ink });
+
+  const rows = [
+    ["FIRST DOWNS", s.stats.us.first, s.stats.them.first],
+    ["TOTAL YARDS", Math.round(s.stats.us.yards), Math.round(Math.max(0, s.stats.them.plays * 5.2))],
+    ["PASSING", Math.round(s.stats.us.pass), "-"],
+    ["RUSHING", Math.round(s.stats.us.rush), "-"],
+    ["COMP / ATT", s.stats.us.comp + "/" + s.stats.us.att, "-"],
+    ["TURNOVERS", s.stats.us.to, "-"],
+  ];
+  const y0 = VIEWTOP + 68;
+  panel(10, y0, ARTW - 20, rows.length * 10 + 8, COL.night2, COL.edge);
+  rows.forEach((r, i) => {
+    const y = y0 + 5 + i * 10;
+    text(r[0], ARTW / 2, y, { scale: 1, color: COL.dim });
+    text(String(r[1]), 16, y, { align: -1, scale: 1, color: s.my.trim });
+    text(String(r[2]), ARTW - 16, y, { align: 1, scale: 1, color: s.opp.trim });
+  });
+
+  const by = y0 + rows.length * 10 + 18;
+  button("again", 20, by, ARTW - 40, 20, "REMATCH", { primary: true });
+  button("menu", 20, by + 26, ARTW - 40, 18, "MAIN MENU", { scale: 1 });
+  text("SEED " + s.seed.toString(16).toUpperCase(), ARTW / 2, by + 50, { scale: 1, color: "#4E5F6B" });
+}
+
+/* ===================================================================
+   INPUT — one pointer, three meanings, decided by what is on screen.
+     aiming   drag moves a cursor on the field, release throws
+     running  drag is a floating stick
+     menus    tap a hit box
+   =================================================================== */
+const Input = {
+  down: false, x: 0, y: 0, sx: 0, sy: 0,
+  holdId: null, aim: null, aimFrom: null,
+  steerX: 0, steerY: 0, sprint: false,
+  tap: null, throwTo: null, tuck: false, snap: false,
+};
+
+function toArt(e) {
+  const r = cv.getBoundingClientRect();
+  return {
+    x: (e.clientX - r.left) / r.width * ARTW,
+    y: (e.clientY - r.top) / r.height * ARTH,
+  };
+}
+
+function onDown(e) {
+  e.preventDefault();
+  Sound.init();
+  const p = toArt(e);
+  Input.down = true;
+  Input.x = Input.sx = p.x;
+  Input.y = Input.sy = p.y;
+  const hot = hitTest(p.x, p.y);
+  Input.holdId = hot ? hot.id : null;
+  if (Input.holdId) return;
+
+  const sim = G.play;
+  if (SCREEN === "game" && G.st.phase === "presnap") { Input.snap = true; return; }
+  if (SCREEN === "game" && G.st.phase === "live" && sim && !sim.over) {
+    if (sim.qbHasIt() && !sim.tucked) {
+      const qb = sim.P[0];
+      Input.aimFrom = { x: qb.x, y: clamp(qb.y + CFG.reachAhead, 0, FIELD.L) };
+      Input.aim = { x: Input.aimFrom.x, y: Input.aimFrom.y };
+    }
+  }
+}
+
+function onMove(e) {
+  if (!Input.down) return;
+  e.preventDefault();
+  const p = toArt(e);
+  Input.x = p.x; Input.y = p.y;
+
+  if (Input.holdId) {
+    // Sliding off a button releases it, the way a hardware button would.
+    const hot = hitTest(p.x, p.y);
+    if (!hot || hot.id !== Input.holdId) Input.holdId = null;
+    return;
+  }
+  const sim = G.play;
+  if (SCREEN !== "game" || G.st.phase !== "live" || !sim || sim.over) return;
+
+  if (Input.aim && sim.qbHasIt() && !sim.tucked) {
+    const dx = (p.x - Input.sx) / PPY * CFG.aimGain;
+    const dy = -(p.y - Input.sy) / PPY * CFG.aimGain;
+    const qb = sim.P[0];
+    let ax = clamp(Input.aimFrom.x + dx, 0.8, FIELD.W - 0.8);
+    let ay = clamp(Input.aimFrom.y + dy, qb.y - 4, qb.y + CFG.maxThrow);
+    ay = clamp(ay, 0.8, FIELD.L - 0.8);
+    Input.aim = { x: ax, y: ay };
+    return;
+  }
+  // Floating stick for the ball carrier.
+  const ddx = p.x - Input.sx, ddy = p.y - Input.sy;
+  const len = Math.hypot(ddx, ddy);
+  if (len < 4) { Input.steerX = 0; Input.steerY = 0; return; }
+  Input.steerX = ddx / len;
+  Input.steerY = -ddy / len;
+  Input.sprint = len > 22;
+}
+
+function onUp(e) {
+  if (!Input.down) return;
+  e.preventDefault();
+  const p = toArt(e);
+  const hot = hitTest(p.x, p.y);
+  if (Input.holdId && hot && hot.id === Input.holdId) Input.tap = Input.holdId;
+
+  const sim = G.play;
+  if (!Input.holdId && SCREEN === "game") {
+    if (G.st.phase === "live" && sim && !sim.over && Input.aim && sim.qbHasIt() && !sim.tucked) {
+      Input.throwTo = { x: Input.aim.x, y: Input.aim.y };
+    }
+    if (G.st.phase === "kick" && G.st.kick && !G.st.kick.flight) {
+      const k = G.st.kick;
+      if (k.power > 0.08) resolveKick(k.aimX, k.power);
+    }
+  }
+
+  Input.down = false;
+  Input.holdId = null;
+  Input.aim = null; Input.aimFrom = null;
+  Input.steerX = 0; Input.steerY = 0; Input.sprint = false;
+}
+
+for (const [ev, fn] of [["pointerdown", onDown], ["pointermove", onMove],
+                        ["pointerup", onUp], ["pointercancel", onUp]]) {
+  cv.addEventListener(ev, fn, { passive: false });
+}
+cv.addEventListener("contextmenu", e => e.preventDefault());
+
+/* ===================================================================
+   THE LOOP
+   =================================================================== */
+let SCREEN = "title";
+let PICK = { forOpponent: false, mine: null };
+G.resultT = 0;
+let driveTimer = 0;
+
+function handleTap(id) {
+  if (!id) return;
+  Sound.blip();
+
+  if (SCREEN === "title") {
+    if (id === "start") { PICK = { forOpponent: false, mine: null }; SCREEN = "teams"; }
+    else if (id === "diff") { SETTINGS.diff = (SETTINGS.diff + 1) % DIFFS.length; saveSettings(); }
+    else if (id === "qlen") { const o = [2, 3, 5, 8]; SETTINGS.quarter = o[(o.indexOf(SETTINGS.quarter) + 1) % o.length]; saveSettings(); }
+    else if (id === "sfx") { SETTINGS.sound = !SETTINGS.sound; Sound.enabled = SETTINGS.sound; saveSettings(); }
+    return;
+  }
+
+  if (SCREEN === "teams") {
+    if (id === "back") { Sound.back(); if (PICK.forOpponent) { PICK.forOpponent = false; } else SCREEN = "title"; return; }
+    if (id.startsWith("team:")) {
+      const t = teamBy(id.slice(5));
+      if (!PICK.forOpponent) {
+        PICK.mine = t; PICK.forOpponent = true;
+        SETTINGS.team = t.ab; saveSettings();
+      } else {
+        newGame(PICK.mine.ab, t.ab);
+        SCREEN = "game";
+        updateCamera(0, true);
+      }
+    }
+    return;
+  }
+
+  const s = G.st;
+  if (id.startsWith("play:")) { snapPlay(playById(id.slice(5))); return; }
+  if (id === "punt") { punt(); return; }
+  if (id === "fg") { beginKick("fg"); return; }
+  if (id === "xp") { beginTry(false); return; }
+  if (id === "two") { beginTry(true); return; }
+  if (id === "advance") { driveTimer = 0; advanceTheirDrive(); return; }
+  if (id === "again") { newGame(s.my.ab, s.opp.ab); return; }
+  if (id === "menu") { SCREEN = "title"; G.play = null; return; }
+}
+
+function update(dt) {
+  if (G.bannerT > 0) G.bannerT -= dt;
+  const tap = Input.tap; Input.tap = null;
+  handleTap(tap);
+  if (SCREEN !== "game" || !G.st) return;
+  const s = G.st;
+
+  if (s.phase === "coin") { s.phase = s.poss === "us" ? "playcall" : "defense"; }
+
+  if (s.phase === "presnap" && Input.snap) { Input.snap = false; G.play.snap(); s.phase = "live"; }
+  Input.snap = false;
+
+  if (s.phase === "live" && G.play) {
+    const inp = {
+      snap: false,
+      steerX: Input.steerX, steerY: Input.steerY, sprint: Input.sprint,
+      throwTo: Input.throwTo, tuck: Input.tuck,
+    };
+    Input.throwTo = null; Input.tuck = false;
+
+    // Fixed timestep: the simulation is only reproducible if it is always
+    // advanced by the same amount, whatever the display is doing.
+    let acc = dt, steps = 0;
+    const H = 1 / 60;
+    while (acc >= H && steps < 6 && !G.play.over) {
+      G.play.step(H, steps === 0 ? inp : { steerX: inp.steerX, steerY: inp.steerY, sprint: inp.sprint });
+      acc -= H; steps++;
+    }
+    if (G.play.over) {
+      s.phase = "result";
+      G.resultT = CFG.deadBall;
+      const r = G.play.result;
+      say(r.headline, CFG.deadBall - 0.2,
+          r.kind === "td" ? "good" : (r.kind.startsWith("int") || r.kind.startsWith("fumble") || r.kind === "safety" || r.kind === "sack") ? "bad" : "flood");
+    }
+  }
+
+  if (s.phase === "result") {
+    G.resultT -= dt;
+    if (G.resultT <= 0) {
+      const r = G.play.result;
+      G.play = null;
+      const wasTwo = s.tryFor === "us2";
+      if (wasTwo) {
+        s.tryFor = null;
+        finishTry(r.kind === "td", 2);
+      } else {
+        applyResult(r);
+      }
+    }
+  }
+
+  if (s.phase === "kick") {
+    const k = s.kick;
+    if (k.flight) {
+      k.flight.t += dt;
+      if (k.flight.t > 1.7) {
+        const good = k.flight.good;
+        const wasXP = k.kind === "xp";
+        s.kick = null;
+        if (wasXP) finishTry(good, 1);
+        else if (good) {
+          s.us += 3; say("FIELD GOAL IS GOOD", 1.4, "good"); Sound.score();
+          if (burn(6)) { if (endOfQuarter()) return; }
+          startTheirDrive(FIELD.oppGoal - 25);
+        } else {
+          say("NO GOOD", 1.4, "bad");
+          if (burn(6)) { if (endOfQuarter()) return; }
+          startTheirDrive(Math.max(FIELD.ownGoal + 20, s.los - 7));
+        }
+      }
+    }
+  }
+
+  if (s.phase === "defense") {
+    driveTimer += dt;
+    if (driveTimer > 1.05) { driveTimer = 0; advanceTheirDrive(); }
+  }
+
+  updateCamera(dt, s.phase === "playcall" || s.phase === "defense");
+}
+
+function draw() {
+  HOT = [];
+  ctx.fillStyle = COL.night;
+  ctx.fillRect(0, 0, cv.width, cv.height);
+
+  if (SCREEN === "title") { drawTitle(); return; }
+  if (SCREEN === "teams") { drawTeams(); return; }
+  if (!G.st) return;
+
+  buildField();
+  drawField();
+  drawLines();
+  drawPlayers();
+  drawAim();
+  drawHUD();
+
+  const p = G.st.phase;
+  if (p === "playcall") drawPlayCall();
+  else if (p === "presnap") drawPresnap();
+  else if (p === "live") drawLiveControls();
+  else if (p === "try") drawTry();
+  else if (p === "kick") drawKick();
+  else if (p === "defense") drawDefense();
+  else if (p === "final") drawFinal();
+
+  drawBanner();
+}
+
+let lastT = 0;
+function frame(ts) {
+  const dt = lastT ? Math.min(0.1, (ts - lastT) / 1000) : 1 / 60;
+  lastT = ts;
+  update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+/* ===================================================================
+   BOOT
+   =================================================================== */
+function boot() {
+  Sound.enabled = SETTINGS.sound;
+  Sound.init();
+  resize();
+  requestAnimationFrame(frame);
+}
+
+document.getElementById("start").addEventListener("click", () => {
+  const b = document.getElementById("boot");
+  b.classList.add("gone");
+  setTimeout(() => b.remove(), 400);
+  boot();
+});
+
+// Size the canvas immediately so the first paint is not a flash of nothing.
+resize();
+</script>
