@@ -321,7 +321,11 @@ section("6. a full game through the phase machine");
   check("state stayed legal throughout", !illegal, illegal);
   check("the game did not run forever", frames < 60 * 60 * 12, frames + " frames");
   check("you ran a real number of plays", st.stats.us.plays >= 8, st.stats.us.plays + "");
-  check("somebody scored", st.us + st.them > 0, `${st.us}-${st.them}`);
+  // Not "somebody scored" — a single short game between two scripted sides can
+  // legitimately end nil-nil, and asserting otherwise makes the suite flaky.
+  // The ten-game run below is where scoring gets asserted.
+  check("the box score adds up", st.stats.us.plays >= st.stats.us.first,
+        `${st.stats.us.plays} plays, ${st.stats.us.first} first downs`);
   check("every phase was exercised",
         ["playcall", "presnap", "live", "result", "defense"].every(p => phases.has(p)),
         [...phases].join(","));
@@ -367,6 +371,83 @@ section("7. ten games, invariants only");
   }
   console.log("   scores:", scores.join("  "));
   check("ten games all finished legally", !worst, worst);
+  const anyPoints = scores.some(s => s !== "0-0");
+  check("points get scored across ten games", anyPoints, scores.join(" "));
+}
+
+/* =====================================================================
+   7b. An incompletion must not move the ball.
+   ===================================================================== */
+section("7b. incompletions");
+{
+  A.SCREEN = "game";
+  A.newGame("IRN", "SUN");
+  const st = A.G.st;
+  A.giveUs(FIELD.ownGoal + 30);
+  const losBefore = st.los, toGoBefore = st.toGo, downBefore = st.down;
+
+  // A pass broken up 22 yards downfield: the ball hit the grass there, but the
+  // next snap comes from where the last one did.
+  A.applyResult({ kind: "incomplete", x: 8, y: losBefore + 22, yards: 22,
+                  elapsed: 4, pass: true, complete: false });
+  check("an incompletion leaves the ball where it was",
+        Math.abs(st.los - losBefore) < 1e-9, `${losBefore} -> ${st.los}`);
+  check("an incompletion still costs a down", st.down === downBefore + 1, String(st.down));
+  check("an incompletion does not shorten the distance",
+        Math.abs(st.toGo - toGoBefore) < 1e-9, String(st.toGo));
+  check("an incompletion cannot make a first down", st.down !== 1, String(st.down));
+
+  // And a completion still does move it.
+  const los2 = st.los;
+  A.applyResult({ kind: "gain", x: 8, y: los2 + 12, yards: 12,
+                  elapsed: 4, pass: true, complete: true });
+  check("a completion moves the ball", st.los > los2, `${los2} -> ${st.los}`);
+  check("twelve yards on 2nd and ten is a first down", st.down === 1, String(st.down));
+}
+
+/* =====================================================================
+   7c. After a turnover, the team that lost the ball has to chase it.
+   ===================================================================== */
+section("7c. turnover returns");
+{
+  let samples = 0, movingTotal = 0, towardTotal = 0;
+  for (let seed = 1; seed <= 600; seed++) {
+    const sim = makePlay({
+      play: PLAYS[4], scheme: SCHEMES[2], los: 50, ballX: FIELD.W / 2, lineToGain: 60,
+      offense: makeRoster(TEAMS[3], 1), defense: makeRoster(TEAMS[1], 2), seed: seed * 37,
+    });
+    sim.snap();
+    let i = 0, thrown = false, pickAt = null, taken = false;
+    while (!sim.over && i < 1400) {
+      const inp = { steerX: 0, steerY: 0 };
+      // Throw it straight at the deep safety.
+      if (!thrown && sim.qbHasIt() && sim.t > 1.6) {
+        const d = sim.P.find(p => p.side === "def" && p.pos === "S");
+        if (d) { inp.throwTo = { x: d.x, y: d.y }; thrown = true; }
+      }
+      sim.step(1 / 60, inp); i++;
+      if (sim.turnover && pickAt === null) pickAt = sim.t;
+      const c = sim.P.find(p => p.hasBall);
+      if (pickAt !== null && !taken && c && sim.t > pickAt + 0.2) {
+        taken = true; samples++;
+        const chasers = sim.P.filter(p => p.side === "off" && p.mot !== "down");
+        movingTotal += chasers.filter(p => Math.hypot(p.vx, p.vy) > 1.0).length;
+        // Intent, not progress: is he pointed at the man with the ball? A fast
+        // returner can still be pulling away while everyone gives honest chase.
+        towardTotal += chasers.filter(p => {
+          const dx = c.x - p.x, dy = c.y - p.y, d = Math.hypot(dx, dy) || 1;
+          return (p.vx * dx + p.vy * dy) / d > 0.5;
+        }).length;
+      }
+    }
+  }
+  const avgMoving = samples ? movingTotal / samples : 0;
+  const avgToward = samples ? towardTotal / samples : 0;
+  console.log(`   ${samples} picks sampled: ${avgMoving.toFixed(1)} of 7 moving, ` +
+              `${avgToward.toFixed(1)} of 7 running at the returner`);
+  check("enough picks to judge", samples > 20, String(samples));
+  check("the intercepted team does not freeze", avgMoving >= 3.5, avgMoving.toFixed(1));
+  check("they run at the returner", avgToward >= 2.5, avgToward.toFixed(1));
 }
 
 /* =====================================================================

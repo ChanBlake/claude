@@ -178,6 +178,9 @@ const CFG = {
   // snapped so one art pixel is a whole number of device pixels, which is what
   // keeps sprites crisp instead of shimmering.
   artH: 230,
+  // Yards of field width kept on screen. Less than the full 30, so the camera
+  // is zoomed in and follows the ball across the field as well as along it.
+  visibleW: 23,
 
   // Movement, yards per second.
   speedMin: 4.0, speedMax: 9.4,
@@ -198,6 +201,10 @@ const CFG = {
   maxBreaks: 3,
   goalLineSurge: 0.26,
   fumbleBase: 0.018,
+  // A beat to secure the ball after a turnover before anyone can make the
+  // tackle. Without it a pick in traffic is whistled dead on the frame it is
+  // caught, and you never see the return — or your own team react to it.
+  turnoverGrace: 0.35,
 
   // Blocking.
   engageR: 1.1,
@@ -407,8 +414,8 @@ const ART = {
   ],
   run1: [
     ".....kkkk....", "....khhhhkk..", "....khhhhhfk.", "....khhhhhfk.",
-    ".....ksskk...", "..kkkjjjjk...", ".kjjjjjjjjk..", ".kjttjjjjjk..",
-    ".kjjjjjjjjkk.", "...kjjjjjk...", "..kppppppk...", ".kp..k..pk...",
+    ".....ksskk...", "..kkkjjjjkks.", ".kjjjjjjjjkk.", ".kjttjjjjjk..",
+    ".kjjjjjjjjk..", "s..kjjjjjk...", "..kppppppk...", ".kp..k..pk...",
     ".kc...k.pk...", ".kk...kck....", "......kk.....",
   ],
   run2: [
@@ -419,9 +426,15 @@ const ART = {
   ],
   run3: [
     ".....kkkk....", "....khhhhkk..", "....khhhhhfk.", "....khhhhhfk.",
-    ".....ksskk...", "...kkjjjjkk..", "..kjjjjjjjjk.", "..kjttjjjjjk.",
-    ".kkjjjjjjjk..", "...kjjjjjk...", "...kppppppk..", "...kp..k..pk.",
+    ".....ksskk...", "s..kkjjjjkk..", ".kkjjjjjjjjk.", "..kjttjjjjjk.",
+    ".kkjjjjjjjk..", "...kjjjjjk..s", "...kppppppk..", "...kp..k..pk.",
     "...kc..k..ck.", "...kk..kk.kk.", ".............",
+  ],
+  catch: [
+    ".....kkkk.ks.", "....khhhhkksk", "....khhhhhfks", "....khhhhhfk.",
+    ".....ksskk...", "...kkjjjjkk..", "..kjjjjjjjjk.", "..kjttjjjjjk.",
+    "..kjjjjjjjk..", "...kjjjjjk...", "...kppppk....", "...kppppk....",
+    "..kp...pk....", "..kc...ck....", "..kk...kk....",
   ],
   block: [
     ".....kkkk......", "....khhhhkk....", "....khhhhhfk...", "....khhhhhfk...",
@@ -441,7 +454,7 @@ const ART = {
 };
 // The cycle a running player walks through. Two contact frames and two
 // passes, so the legs read as a stride rather than a flicker.
-const RUN_CYCLE = ["run1", "run2", "run3", "stand"];
+const RUN_CYCLE = ["run1", "run2", "run3", "run2"];
 const BALL_ART = [".bbb.", "bblbb", "bblbb", ".bbb."];
 
 const PAL_STATIC = { k: "#101418", c: "#171B1F", s: "#C98F63", b: "#7B4A22", l: "#F0EDE4" };
@@ -908,6 +921,7 @@ function makePlay(o) {
     handoffAt: play.kind === "run" ? 0.3 : -1,
     handoffDone: false,
     threw: false, completed: false,
+    graceUntil: 0,
     windup: -1, windupTo: null,
     shake: 0,
     passAttempted: false,
@@ -1030,6 +1044,7 @@ function makePlay(o) {
 
   function intercept(d) {
     S.turnover = true;
+    S.graceUntil = S.t + CFG.turnoverGrace;
     d.hasBall = true;
     d.x = S.ball.tx; d.y = S.ball.ty;
     S.ball = { state: "held", who: d.id, x: d.x, y: d.y, h: 0 };
@@ -1260,7 +1275,12 @@ function makePlay(o) {
         if (p.hasBall) { carrierAI(p); continue; }
       }
 
-      if (p.side === "off") offenseAI(p, aiming);
+      // Dispatch on who has the ball RIGHT NOW, not on which side of the ball
+      // a man started the play. After an interception, a fumble or a fielded
+      // kick, `flipJobs` hands everyone the other unit's job — routing by
+      // `p.side` sent them to an AI that had no case for it, so the whole
+      // covering team simply stood still and watched the return.
+      if (attacking(p)) offenseAI(p, aiming);
       else defenseAI(p);
     }
   }
@@ -1533,7 +1553,11 @@ function makePlay(o) {
         win.hasBall = true;
         S.ball = { state: "held", who: win.id, x: win.x, y: win.y, h: 0 };
         if (mine) end("fumble-own", win.x, win.y, "FUMBLE — RECOVERED");
-        else { S.turnover = true; S.shake = 0.4; flipJobs(win); }
+        else {
+          S.turnover = true; S.shake = 0.4;
+          S.graceUntil = S.t + CFG.turnoverGrace;
+          flipJobs(win);
+        }
         return;
       }
       if (b.timer <= 0 || b.x <= 0.2 || b.x >= FIELD.W - 0.2)
@@ -1544,6 +1568,7 @@ function makePlay(o) {
   function contact() {
     const c = carrier();
     if (!c || c.mot === "down") return;
+    if (S.t < S.graceUntil) return;      // securing it
     for (const p of P) {
       if (p === c || attacking(p) || p.mot === "down") continue;
       // A blocked defender still occupies space. He cannot chase, but a runner
@@ -1772,15 +1797,20 @@ function applyResult(res) {
       startTheirDrive(FIELD.oppGoal - 25, true);
       break;
     default: {
-      // Ordinary down.
-      const spot = clamp(res.y, FIELD.ownGoal + 0.5, FIELD.oppGoal - 0.5);
-      s.ballX = clamp(res.x, 4, FIELD.W - 4);
+      // Ordinary down. An incompletion is the exception: the ball comes back
+      // to the previous spot, it does not stay where it hit the grass — which
+      // is what this used to do, quietly handing the offence free yards and
+      // the occasional free first down.
+      const incomplete = res.kind === "incomplete";
+      const spot = incomplete ? s.los
+                              : clamp(res.y, FIELD.ownGoal + 0.5, FIELD.oppGoal - 0.5);
+      if (!incomplete) s.ballX = clamp(res.x, 4, FIELD.W - 4);
       if (spot >= s.lineToGain - 0.01) {
         st.first++;
         Sound.first();
         say("FIRST DOWN", 1.0, "flood");
         giveUs(spot);
-        s.ballX = clamp(res.x, 4, FIELD.W - 4);
+        if (!incomplete) s.ballX = clamp(res.x, 4, FIELD.W - 4);
       } else if (s.down >= 4) {
         say("TURNOVER ON DOWNS", 1.6, "bad");
         startTheirDrive(spot);
@@ -1990,6 +2020,7 @@ function snapPlay(play) {
   s.chosen = play;
   s.scheme = callScheme({ down: s.down, toGo: s.toGo, los: s.los, q: s.q,
                           clock: s.clock, us: s.us, them: s.them }, RNG);
+  fxReset();
   G.play = makePlay({
     play, scheme: s.scheme,
     los: s.los, ballX: s.ballX, lineToGain: s.lineToGain,
@@ -2057,7 +2088,7 @@ function resize() {
 
   VIEWTOP = Math.round(ARTH * 0.1);
   VIEWH = ARTH - VIEWTOP;
-  PPY = VIEWH / FIELD.W;
+  PPY = VIEWH / CFG.visibleW;
   fieldKey = "";
   textCache.clear();
   spriteCache.clear();
@@ -2118,7 +2149,8 @@ function buildField() {
 
   // A margin of turf beyond each back line, so the camera can pan far enough
   // to show the goalposts instead of pinning them to the screen edge.
-  const w = Math.ceil((FIELD.L + FIELD_MARGIN * 2) * PPY), h = VIEWH;
+  const w = Math.ceil((FIELD.L + FIELD_MARGIN * 2) * PPY);
+  const h = Math.ceil(FIELD.W * PPY);
   fieldCv = document.createElement("canvas");
   fieldCv.width = w * UNIT; fieldCv.height = h * UNIT;
   const g = fieldCv.getContext("2d");
@@ -2128,17 +2160,25 @@ function buildField() {
     g.fillRect(Math.round(x * UNIT), Math.round(y * UNIT),
                Math.max(UNIT, Math.round(ww * UNIT)), Math.max(UNIT, Math.round(hh * UNIT)));
   };
-  const X = fy => (fy + FIELD_MARGIN) * PPY;   // field length → canvas column
+  // You drive RIGHT TO LEFT. This line and `scrX` are the only two places that
+  // decide that; everything upstream still counts yards the same way.
+  const X = fy => (FIELD.L + FIELD_MARGIN - fy) * PPY;
+  // Anything spanning two yard lines has to be expressed as a pair of ends,
+  // not an origin and a width — the width changes sign when the field flips.
+  const band = (fyA, fyB, y, hh, c) => {
+    const a = X(fyA), b = X(fyB);
+    R(Math.min(a, b), y, Math.abs(b - a), hh, c);
+  };
   const Y = fx => (FIELD.W - fx) * PPY;        // field width  → canvas row
 
   R(0, 0, w, h, COL.turfDark);                 // the margin, behind the posts
-  R(X(0), 0, FIELD.L * PPY, h, COL.turf);
+  band(0, FIELD.L, 0, h, COL.turf);
   for (let y = FIELD.ownGoal; y < FIELD.oppGoal; y += 10)
-    R(X(y + 5), 0, 5 * PPY, h, COL.mow);
+    band(y + 5, y + 10, 0, h, COL.mow);
 
-  // End zones: yours on the left, theirs on the right, because you drive right.
-  R(0, 0, X(FIELD.ownGoal), h, G.st.my.jersey);
-  R(X(FIELD.oppGoal), 0, w - X(FIELD.oppGoal), h, G.st.opp.jersey);
+  // End zones: theirs on the left, yours on the right, because you drive left.
+  band(0, FIELD.ownGoal, 0, h, G.st.my.jersey);
+  band(FIELD.oppGoal, FIELD.L, 0, h, G.st.opp.jersey);
 
   // End-zone lettering, rotated to run up the back of each zone.
   const nameFor = (t, cxArt, flip) => {
@@ -2173,7 +2213,7 @@ function buildField() {
     const c = textCanvas(label, COL.chalkDim);
     const scale = Math.max(1, Math.round(PPY * 0.28));
     const dw = c.width * scale, dh = c.height * scale;
-    for (const [rowY, rot] of [[Y(FIELD.W - 4.5), -Math.PI / 2], [Y(4.5), Math.PI / 2]]) {
+    for (const [rowY, rot] of [[Y(FIELD.W - 6), -Math.PI / 2], [Y(6), Math.PI / 2]]) {
       g.save();
       g.translate(Math.round(X(y) * UNIT), Math.round(rowY * UNIT));
       g.rotate(rot);
@@ -2183,8 +2223,8 @@ function buildField() {
     }
   }
   // Sidelines.
-  R(X(0), 0, FIELD.L * PPY, 1, COL.chalk);
-  R(X(0), h - 1, FIELD.L * PPY, 1, COL.chalk);
+  band(0, FIELD.L, 0, 1, COL.chalk);
+  band(0, FIELD.L, h - 1, 1, COL.chalk);
 
   // Goalposts on both back lines.
   for (const backY of [0, FIELD.L]) {
@@ -2199,7 +2239,7 @@ function buildField() {
 
 /* ---- camera ------------------------------------------------------ */
 const FIELD_MARGIN = 9;      // yards of turf drawn beyond each back line
-let camX = 0;
+let camX = 0, camY = 0;
 function focusY() {
   const s = G.st;
   // On a kick, sit between the tee and the posts so you can see what you are
@@ -2211,24 +2251,129 @@ function focusY() {
   }
   return s.los + 8;
 }
+// Where the action is, across the field — used for the vertical follow.
+function focusX() {
+  const s = G.st;
+  if (s.phase === "kick" && s.kick) return s.kick.spotX;
+  if (G.play && !G.play.over) return G.play.ball.x;
+  return s.ballX;
+}
 function updateCamera(dt, snap) {
   const fieldW = (FIELD.L + FIELD_MARGIN * 2) * PPY;
-  const target = clamp((focusY() + FIELD_MARGIN) * PPY - ARTW * 0.38,
-                       0, Math.max(0, fieldW - ARTW));
-  if (snap) camX = target;
-  else camX += (target - camX) * (1 - Math.pow(0.0016, dt));
+  const fieldH = FIELD.W * PPY;
+  // Downfield is to the LEFT, so the ball sits right of centre and you see
+  // where you are going.
+  const tx = clamp((FIELD.L + FIELD_MARGIN - focusY()) * PPY - ARTW * 0.62,
+                   0, Math.max(0, fieldW - ARTW));
+  const ty = clamp((FIELD.W - focusX()) * PPY - VIEWH * 0.5,
+                   0, Math.max(0, fieldH - VIEWH));
+  if (snap) { camX = tx; camY = ty; return; }
+  const k = 1 - Math.pow(0.0016, dt);
+  camX += (tx - camX) * k;
+  // The across-field follow is lazier; snapping to every sidestep is nauseating.
+  camY += (ty - camY) * (1 - Math.pow(0.02, dt));
 }
 // Field point → screen. These two are the entire rotation.
-const scrX = fy => (fy + FIELD_MARGIN) * PPY - camX;
-const scrY = fx => VIEWTOP + (FIELD.W - fx) * PPY;
+const scrX = fy => (FIELD.L + FIELD_MARGIN - fy) * PPY - camX;
+const scrY = fx => VIEWTOP + (FIELD.W - fx) * PPY - camY;
+
+/* ---- effects ------------------------------------------------------
+   Small, cheap, and driven entirely by watching the simulation rather
+   than by the simulation telling the renderer anything. Contact throws
+   up turf, a caught ball is held for a beat, and a thrown ball leaves a
+   trail so you can read where it is going.
+   ------------------------------------------------------------------ */
+const FX = { puffs: [], trail: [], catchPose: null, prevBall: "dead", prevCaught: false };
+
+function fxReset() {
+  FX.puffs.length = 0; FX.trail.length = 0;
+  FX.catchPose = null; FX.prevBall = "dead"; FX.prevCaught = false;
+}
+
+function fxUpdate(dt, sim) {
+  for (let i = FX.puffs.length - 1; i >= 0; i--) {
+    const q = FX.puffs[i];
+    q.t += dt;
+    q.x += q.vx * dt; q.y += q.vy * dt;
+    q.vx *= 0.92; q.vy *= 0.92;
+    if (q.t >= q.life) FX.puffs.splice(i, 1);
+  }
+  if (FX.catchPose) {
+    FX.catchPose.t -= dt;
+    if (FX.catchPose.t <= 0) FX.catchPose = null;
+  }
+  if (!sim) { FX.trail.length = 0; FX.prevBall = "dead"; return; }
+
+  const b = sim.ball;
+  if (b.state === "air") {
+    FX.trail.push({ x: b.x, y: b.y, h: b.h });
+    if (FX.trail.length > 9) FX.trail.shift();
+  } else if (FX.trail.length) {
+    FX.trail.shift();      // let it drain rather than vanish
+  }
+
+  // Hold the catch pose off the simulation's own flag rather than off a ball
+  // state transition — the transition can fall between two frames when the
+  // step loop runs several substeps, and then the pose never shows.
+  if (sim.completed && !FX.prevCaught) {
+    const c = sim.P.find(pl => pl.hasBall);
+    if (c) { FX.catchPose = { id: c.id, t: 0.4 }; puffAt(c.x, c.y, 4, 2.2); }
+  }
+  FX.prevCaught = sim.completed;
+
+  // A ball that went from the air to dead hit the grass.
+  if (FX.prevBall === "air" && b.state === "dead") puffAt(b.x, b.y, 5, 1.6);
+  FX.prevBall = b.state;
+
+  // Anyone who just hit the deck kicks up turf.
+  for (const p of sim.P) {
+    if (p.mot === "down" && !p._puffed) { p._puffed = true; puffAt(p.x, p.y, 7, 3.4); }
+    else if (p.mot !== "down") p._puffed = false;
+  }
+}
+
+function puffAt(fx, fy, n, spread) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    FX.puffs.push({
+      x: fx, y: fy,
+      vx: Math.cos(a) * spread * (0.4 + Math.random() * 0.6),
+      vy: Math.sin(a) * spread * (0.4 + Math.random() * 0.6),
+      t: 0, life: 0.28 + Math.random() * 0.26,
+    });
+  }
+}
+
+function fxDrawTrail() {
+  if (FX.trail.length < 2) return;
+  for (let i = 0; i < FX.trail.length - 1; i++) {
+    const t = FX.trail[i];
+    const a = (i + 1) / FX.trail.length;
+    ctx.globalAlpha = a * 0.5;
+    const size = 1 + a * 1.5;
+    rect(scrX(t.y) - size / 2, scrY(t.x) - t.h * PPY * 0.9 - size / 2, size, size, COL.chalk);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function fxDrawPuffs() {
+  for (const q of FX.puffs) {
+    const a = 1 - q.t / q.life;
+    ctx.globalAlpha = a * 0.55;
+    const size = 1 + a * 2;
+    rect(scrX(q.y) - size / 2, scrY(q.x) - size / 2, size, size,
+         a > 0.6 ? "#CFE0CF" : "#8FA98F");
+  }
+  ctx.globalAlpha = 1;
+}
 
 /* ---- the play ---------------------------------------------------- */
 function drawField() {
   const shake = G.play ? G.play.shake : 0;
   const ox = shake > 0 ? Math.round((Math.random() - 0.5) * shake * 7) : 0;
   const oy = shake > 0 ? Math.round((Math.random() - 0.5) * shake * 7) : 0;
-  ctx.drawImage(fieldCv, D(camX - ox), 0, D(ARTW), D(VIEWH),
-                0, D(VIEWTOP + oy), D(ARTW), D(VIEWH));
+  ctx.drawImage(fieldCv, D(camX - ox), D(camY - oy), D(ARTW), D(VIEWH),
+                0, D(VIEWTOP), D(ARTW), D(VIEWH));
 }
 
 function drawLines() {
@@ -2244,6 +2389,8 @@ function drawLines() {
 
 function drawPlayers(dt) {
   const sim = G.play;
+  fxUpdate(dt, sim);
+  fxDrawPuffs();
   if (!sim) return;
   // Players nearer the bottom touchline overlap those behind them.
   const order = sim.P.slice().sort((a, b) => b.x - a.x);
@@ -2257,10 +2404,12 @@ function drawPlayers(dt) {
     // slower than a receiver's without a second animation table.
     p._stride = (p._stride || 0) + speed * dt;
     let frame;
+    const posing = FX.catchPose && FX.catchPose.id === p.id;
     if (p.mot === "down") frame = "down";
+    else if (posing) frame = "catch";
     else if (p.mot === "engaged") frame = "block";
     else if (speed < 0.6) frame = "stand";
-    else frame = RUN_CYCLE[Math.floor(p._stride / 0.85) % RUN_CYCLE.length];
+    else frame = RUN_CYCLE[Math.floor(p._stride / 0.8) % RUN_CYCLE.length];
 
     const sp = sprite(frame, team, UNIT);
     const cxA = scrX(p.y), cyA = scrY(p.x);
@@ -2270,7 +2419,7 @@ function drawPlayers(dt) {
     ctx.fillStyle = COL.shadow;
     ctx.fillRect(D(cxA - 4), D(cyA - 1.5), D(8), D(3));
 
-    const faceLeft = Math.sin(p.face) < 0;
+    const faceLeft = Math.sin(p.face) > 0;   // +downfield is screen-left
     const dx = D(cxA - sp.w / 2), dy = D(cyA - sp.h + 2);
     if (faceLeft) {
       ctx.save();
@@ -2299,6 +2448,8 @@ function drawPlayers(dt) {
       rect(mx - 1, my + 0.5, 2, 2, G.st.my.trim);
     }
   }
+
+  fxDrawTrail();
 
   const b = sim.ball;
   if (b.state === "air" || b.state === "loose") {
@@ -2573,9 +2724,10 @@ function drawKick() {
   if (k.flight) return;
 
   if (Input.down) {
-    const dx = Input.x - Input.sx, dy = Math.max(0, Input.y - Input.sy);
-    k.power = clamp(dy / 52, 0, 1);
-    k.aimX = clamp(-dx / 9, -7, 7);
+    const back = Math.max(0, Input.x - Input.sx);       // pull away from the posts
+    const across = -(Input.y - Input.sy);               // up on screen aims high
+    k.power = clamp(back / 58, 0, 1);
+    k.aimX = clamp(across / 11, -7, 7);
     // Preview, on the field, from the tee toward the posts.
     for (let i = 1; i <= 16; i++) {
       const t = i / 16;
@@ -2594,7 +2746,7 @@ function drawKick() {
     rect(ARTW / 2 - bw / 2 + bw * 0.88, ARTH - 24, 1, 11, COL.chalk);
     text("RELEASE", ARTW / 2, ARTH - 12, { color: COL.ink });
   } else {
-    text("DRAG DOWN, THEN RELEASE   ·   SIDEWAYS TO AIM", ARTW / 2, ARTH - 14,
+    text("PULL BACK, THEN RELEASE   ·   UP AND DOWN TO AIM", ARTW / 2, ARTH - 14,
          { color: COL.ink });
   }
 }
@@ -2785,17 +2937,20 @@ function onMove(e) {
   if (SCREEN !== "game" || G.st.phase !== "live" || !sim || sim.over) return;
 
   if (Input.aim && sim.qbHasIt() && !sim.tucked) {
-    // Screen right is downfield; screen up is across the field.
-    const dAlong = (p.x - Input.sx) / PPY * CFG.aimGain;
+    // Screen LEFT is downfield; screen up is across the field.
+    const dAlong = -(p.x - Input.sx) / PPY * CFG.aimGain;
     const dAcross = -(p.y - Input.sy) / PPY * CFG.aimGain;
     const qb = sim.P[0];
     let ay = clamp(Input.aimFrom.y + dAlong, qb.y - 4, qb.y + CFG.maxThrow);
-    // Keep the whole crosshair on the field, arms included.
-    let ax = clamp(Input.aimFrom.x + dAcross, 2.0, FIELD.W - 2.0);
-    // A target you cannot see is not a target: keep the cursor on screen.
-    const leftFy = (camX + 14) / PPY;
-    const rightFy = (camX + ARTW - 14) / PPY;
-    ay = clamp(ay, Math.max(0.8, leftFy), Math.min(FIELD.L - 0.8, rightFy));
+    let ax = clamp(Input.aimFrom.x + dAcross, 1.5, FIELD.W - 1.5);
+    // A target you cannot see is not a target: keep the cursor on screen, on
+    // both axes now that the camera pans across the field too.
+    const deepFy = FIELD.L + FIELD_MARGIN - (camX + 16) / PPY;
+    const shortFy = FIELD.L + FIELD_MARGIN - (camX + ARTW - 16) / PPY;
+    ay = clamp(ay, Math.max(0.8, shortFy), Math.min(FIELD.L - 0.8, deepFy));
+    const topFx = FIELD.W - (camY + 12) / PPY;
+    const botFx = FIELD.W - (camY + VIEWH - 12) / PPY;
+    ax = clamp(ax, Math.max(0.8, botFx), Math.min(FIELD.W - 0.8, topFx));
     Input.aim = { x: ax, y: ay };
     return;
   }
@@ -2803,8 +2958,8 @@ function onMove(e) {
   const ddx = p.x - Input.sx, ddy = p.y - Input.sy;
   const len = Math.hypot(ddx, ddy);
   if (len < 4) { Input.steerX = 0; Input.steerY = 0; return; }
-  Input.steerY = ddx / len;      // screen right → downfield
-  Input.steerX = -ddy / len;     // screen up    → across
+  Input.steerY = -ddx / len;     // screen left → downfield
+  Input.steerX = -ddy / len;     // screen up   → across
   Input.sprint = len > 26;
 }
 

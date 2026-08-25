@@ -1,8 +1,8 @@
 # PIXEL BOWL
 
 A one-thumb pixel football game for a phone. **Turn the phone sideways** — the
-field runs left to right and you drive toward the right-hand end zone. Offense
-only, drag to aim and release to throw.
+field runs left to right and you drive toward the **left-hand** end zone.
+Offense only, drag to aim and release to throw.
 
 Runs in mobile Safari with no App Store, no Xcode and no Mac. One HTML file,
 no build step, no dependencies, and no image or audio assets: every sprite is
@@ -28,7 +28,7 @@ One thumb, three meanings, decided by what is on screen.
 |---|---|
 | **Call a play** | tap a card. Twelve plays over two pages — swipe the row to turn the page. On 4th down you also get PUNT and FIELD GOAL |
 | **Snap** | tap anywhere |
-| **Throw** | press and drag — a crosshair moves on the field ahead of your thumb; release to throw there |
+| **Throw** | press and drag left — a crosshair moves downfield ahead of your thumb; release to throw there |
 | **Run** | `RUN` tucks it, then drag to steer. The carrier runs forward on his own; you steer, you don't drive |
 | **Kick** | drag down and release. Sideways aims, length is power, the wind arrow matters — and past the mark on the bar, extra power buys distance with accuracy |
 
@@ -57,6 +57,10 @@ One file, in labelled sections:
 | `G` / `newGame` | Rules, drives, the phase machine |
 | `simulateTheirDrive` | The opponent's possession, abstracted |
 | Render / Input | Art-pixel rendering at an integer scale; one pointer |
+
+**The camera is zoomed past the sidelines.** It shows 23 of the field's 30
+yards and follows the ball across as well as along, so players read at a size
+worth animating.
 
 **One coordinate frame for everything.** You attack toward y = 110, they attack
 toward y = 10. Nothing ever mirrors, so "the ball is on the 35" means the same
@@ -109,6 +113,11 @@ Measured on PRO over 14 full games with a scripted competent player:
 | Yards per play | 7.3–7.5 |
 | Completions | 43–51% |
 | Turnovers | ~1.2 a game |
+
+**Effects are driven by watching the simulation, never by it.** The renderer
+notices a completion, a body hitting the deck or a ball in the air and produces
+the catch pose, the turf spray and the trail itself. Nothing in `makePlay` knows
+a renderer exists.
 
 **The known weak spot is the run game near the goal line.** Which front the CPU
 calls dominates the result: a dive from the 2 scores on 90 of 90 against a base

@@ -60,7 +60,7 @@ function loadGame({ width = 844, height = 390, file = null } = {}) {
       newGame, giveUs, applyResult, snapPlay, punt, beginKick, resolveKick,
       startTheirDrive, advanceTheirDrive, simulateTheirDrive, downText, fieldLabel,
       fgDistance, inFGRange, update, draw, handleTap, hitTest, resize,
-      textW, glyphRows, GLYPHS, ART, BALL_ART, clamp,
+      textW, glyphRows, GLYPHS, ART, BALL_ART, clamp, FX, RUN_CYCLE,
       get SCREEN() { return SCREEN; }, set SCREEN(v) { SCREEN = v; },
       get SETTINGS() { return SETTINGS; },
       get RECORD() { return RECORD; },

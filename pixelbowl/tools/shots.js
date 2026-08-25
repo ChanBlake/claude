@@ -130,8 +130,8 @@ function buildTestPage() {
   await shot("08-live");
 
   // Drag to aim: press low, drag up, hold — then screenshot the crosshair.
-  const from = await artPoint(150, 190);
-  const to = await artPoint(300, 90);
+  const from = await artPoint(320, 190);
+  const to = await artPoint(150, 120);
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
   await page.mouse.move(to.x, to.y, { steps: 12 });
@@ -155,7 +155,7 @@ function buildTestPage() {
   await shot("12-fourth-down");
   try {
     await tapId("fg"); await page.waitForTimeout(300); await shot("13-kick-meter");
-    const kf = await artPoint(200, 90), kt = await artPoint(214, 150);
+    const kf = await artPoint(200, 120), kt = await artPoint(250, 112);
     await page.mouse.move(kf.x, kf.y); await page.mouse.down();
     await page.mouse.move(kt.x, kt.y, { steps: 10 });
     await page.waitForTimeout(150); await shot("14-kick-charging");
