@@ -39,7 +39,7 @@ function buildTestPage() {
     args: ["--no-sandbox", "--disable-dev-shm-usage"],
   });
   const ctx = await browser.newContext({
-    viewport: { width: 390, height: 844 },
+    viewport: { width: 844, height: 390 },
     deviceScaleFactor: 3,
     isMobile: true,
     hasTouch: true,
@@ -110,17 +110,28 @@ function buildTestPage() {
   }
   await shot("06-playcall");
 
+  {
+    const a = await artPoint(250, 200), b = await artPoint(150, 200);
+    await page.mouse.move(a.x, a.y); await page.mouse.down();
+    await page.mouse.move(b.x, b.y, { steps: 8 }); await page.mouse.up();
+    await page.waitForTimeout(250);
+    await shot("06b-playcall-page2");
+    const c = await artPoint(150, 200), d2 = await artPoint(250, 200);
+    await page.mouse.move(c.x, c.y); await page.mouse.down();
+    await page.mouse.move(d2.x, d2.y, { steps: 8 }); await page.mouse.up();
+    await page.waitForTimeout(250);
+  }
   await tapId("play:verts");
   await page.waitForTimeout(300);
   await shot("07-presnap");
 
-  await tapArt(90, 300);                     // snap
+  await tapArt(140, 150);                    // snap
   await page.waitForTimeout(900);
   await shot("08-live");
 
   // Drag to aim: press low, drag up, hold — then screenshot the crosshair.
-  const from = await artPoint(60, 300);
-  const to = await artPoint(100, 170);
+  const from = await artPoint(150, 190);
+  const to = await artPoint(300, 90);
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
   await page.mouse.move(to.x, to.y, { steps: 12 });
@@ -144,7 +155,7 @@ function buildTestPage() {
   await shot("12-fourth-down");
   try {
     await tapId("fg"); await page.waitForTimeout(300); await shot("13-kick-meter");
-    const kf = await artPoint(84, 150), kt = await artPoint(96, 230);
+    const kf = await artPoint(200, 90), kt = await artPoint(214, 150);
     await page.mouse.move(kf.x, kf.y); await page.mouse.down();
     await page.mouse.move(kt.x, kt.y, { steps: 10 });
     await page.waitForTimeout(150); await shot("14-kick-charging");

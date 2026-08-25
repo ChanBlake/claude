@@ -1,7 +1,8 @@
 # PIXEL BOWL
 
-A one-thumb pixel football game for a phone. Portrait, offense only, drag to
-aim and release to throw — the Retro Bowl shape, built from scratch.
+A one-thumb pixel football game for a phone. **Turn the phone sideways** — the
+field runs left to right and you drive toward the right-hand end zone. Offense
+only, drag to aim and release to throw.
 
 Runs in mobile Safari with no App Store, no Xcode and no Mac. One HTML file,
 no build step, no dependencies, and no image or audio assets: every sprite is
@@ -17,7 +18,7 @@ python3 -m http.server 8000    # then http://<your-ip>:8000 on the phone
 ```
 
 On iPhone, **Share → Add to Home Screen** gives you a full-screen app with no
-browser chrome.
+browser chrome. Hold it sideways; the game says so if you don't.
 
 ## Controls
 
@@ -25,11 +26,11 @@ One thumb, three meanings, decided by what is on screen.
 
 | | |
 |---|---|
-| **Call a play** | tap a card. Six plays; on 4th down you also get PUNT and FIELD GOAL |
+| **Call a play** | tap a card. Twelve plays over two pages — swipe the row to turn the page. On 4th down you also get PUNT and FIELD GOAL |
 | **Snap** | tap anywhere |
 | **Throw** | press and drag — a crosshair moves on the field ahead of your thumb; release to throw there |
 | **Run** | `RUN` tucks it, then drag to steer. The carrier runs forward on his own; you steer, you don't drive |
-| **Kick** | drag down and release. Direction aims, length is power, and the wind arrow matters |
+| **Kick** | drag down and release. Sideways aims, length is power, the wind arrow matters — and past the mark on the bar, extra power buys distance with accuracy |
 
 You are aiming at a **spot on the grass**, not at a receiver. Lead him — the
 dotted arc shows where the ball lands, and receivers break on the ball once it
@@ -59,7 +60,13 @@ One file, in labelled sections:
 
 **One coordinate frame for everything.** You attack toward y = 110, they attack
 toward y = 10. Nothing ever mirrors, so "the ball is on the 35" means the same
-thing to the renderer, the rulebook and the drive sim.
+thing to the renderer, the rulebook and the drive sim. The simulation thinks in
+"y is downfield, x is across" and the screen is landscape — that 90° rotation
+lives in two functions (`scrX`/`scrY`) and the input handler, and nowhere else.
+
+**Positions round to device pixels, not art pixels.** Sprites are baked at the
+art scale and blitted 1:1, so they stay crisp while moving on a grid five or
+six times finer. Rounding in art space is what made it judder.
 
 **Difficulty changes how the defense reads the play** — how often it calls the
 right front, and how fast its defenders react. It never changes how fast anyone

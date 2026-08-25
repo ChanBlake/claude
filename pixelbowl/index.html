@@ -173,10 +173,11 @@ const CFG = {
   fieldL: 120,
   endZone: 10,
 
-  // Rendering. `artW` is the target width of the screen in art pixels; the
-  // real value is snapped so one art pixel is a whole number of device
-  // pixels, which is what keeps the sprites crisp instead of shimmering.
-  artW: 176,
+  // Rendering. The game is landscape, so the art scale is set by the screen's
+  // HEIGHT — that is the axis the field's width has to fit. The real value is
+  // snapped so one art pixel is a whole number of device pixels, which is what
+  // keeps sprites crisp instead of shimmering.
+  artH: 230,
 
   // Movement, yards per second.
   speedMin: 4.0, speedMax: 9.4,
@@ -251,6 +252,8 @@ const FIELD = {
   ownGoal: CFG.endZone,               // y = 10
   oppGoal: CFG.fieldL - CFG.endZone,  // y = 110
   midY: CFG.fieldW / 2,
+  // Regulation uprights are 18 feet 6 inches apart — 3.08 yards either side.
+  uprightHalf: 3.1,
 };
 
 const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
@@ -387,37 +390,58 @@ const textW = s => s.length ? s.length * (GW + TRACK) - TRACK : 0;
    SPRITES — hand-written pixel grids, recoloured per team and baked
    into offscreen canvases once. The game ships no image files.
 
-   Players are drawn from behind and slightly above: you are looking
-   downfield with them, which is the only view that reads at this size.
-     .  clear   k outline   h helmet   j jersey   t trim
-     p  pants   c cleat     b ball     l lace     s skin
+   The field runs left to right, so players are drawn in a 3/4 side view
+   facing RIGHT; the renderer flips the x-scale to face left. The run
+   cycle is four frames — contact, pass, contact, pass — driven by
+   distance covered, so a slow lineman's legs turn over slower for free.
+
+     .  clear   k outline   h helmet   f facemask   s skin
+     j  jersey  t trim      p pants    c cleat      b ball
    =================================================================== */
 const ART = {
+  stand: [
+    ".....kkkk....", "....khhhhkk..", "....khhhhhfk.", "....khhhhhfk.",
+    ".....ksskk...", "...kkjjjjk...", "..kjjjjjjjk..", "..kjttjjjjk..",
+    "..kjjjjjjjk..", "...kjjjjjk...", "...kppppk....", "...kppppk....",
+    "..kp...pk....", "..kc...ck....", "..kk...kk....",
+  ],
   run1: [
-    "...kkkkk...", "..khhhhhk..", "..khhhhhk..", "..kkhhhkk..",
-    ".kjjjjjjjk.", "kjjjttjjjjk", "kjjjttjjjjk", "kjjjjjjjjjk",
-    ".kjjjjjjjk.", "..kpppppk..", ".kpp...ppk.", ".kp.....pk.",
-    ".kc.....ck.", ".kk.....kk.",
+    ".....kkkk....", "....khhhhkk..", "....khhhhhfk.", "....khhhhhfk.",
+    ".....ksskk...", "..kkkjjjjk...", ".kjjjjjjjjk..", ".kjttjjjjjk..",
+    ".kjjjjjjjjkk.", "...kjjjjjk...", "..kppppppk...", ".kp..k..pk...",
+    ".kc...k.pk...", ".kk...kck....", "......kk.....",
   ],
   run2: [
-    "...kkkkk...", "..khhhhhk..", "..khhhhhk..", "..kkhhhkk..",
-    ".kjjjjjjjk.", "kjjjttjjjjk", "kjjjttjjjjk", "kjjjjjjjjjk",
-    ".kjjjjjjjk.", "..kpppppk..", "..kpp.ppk..", "..kp...pk..",
-    "..kc...ck..", "..kk...kk..",
+    ".....kkkk....", "....khhhhkk..", "....khhhhhfk.", "....khhhhhfk.",
+    ".....ksskk...", "...kkjjjjk...", "..kjjjjjjjk..", "..kjttjjjjk..",
+    "..kjjjjjjjk..", "...kjjjjjk...", "...kppppk....", "...kppppk....",
+    "...kp.pk.....", "...kc.ck.....", "...kk.kk.....",
+  ],
+  run3: [
+    ".....kkkk....", "....khhhhkk..", "....khhhhhfk.", "....khhhhhfk.",
+    ".....ksskk...", "...kkjjjjkk..", "..kjjjjjjjjk.", "..kjttjjjjjk.",
+    ".kkjjjjjjjk..", "...kjjjjjk...", "...kppppppk..", "...kp..k..pk.",
+    "...kc..k..ck.", "...kk..kk.kk.", ".............",
   ],
   block: [
-    "...kkkkk...", "..khhhhhk..", "..khhhhhk..", "..kkhhhkk..",
-    "kkjjjjjjjkk", "kjjjttjjjjk", "kjjjttjjjjk", "kjjjjjjjjjk",
-    ".kjjjjjjjk.", "..kpppppk..", "..kpp.ppk..", "..kp...pk..",
-    "..kc...ck..", "..kk...kk..",
+    ".....kkkk......", "....khhhhkk....", "....khhhhhfk...", "....khhhhhfk...",
+    ".....ksskk.....", "...kkjjjjk.....", "..kjjjjjjjkkkk.", "..kjttjjjjjssk.",
+    "..kjjjjjjjkkkk.", "...kjjjjjk.....", "...kppppk......", "...kppppk......",
+    "..kp...pk......", "..kc...ck......", "..kk...kk......",
+  ],
+  dive: [
+    "..........kkkk..", ".........khhhhk.", "kk......khhhhffk", "kckkkk..kssk....",
+    ".kkjjjkkjjjk....", "..kjjjjjjjjjk...", "..kppppjjjjk....", ".kppppk.kkk.....",
+    "kck.kk..........",
   ],
   down: [
-    "...........", "...........", "..kkkkkkk..", ".khhjjjjjk.",
-    ".khhjjjppk.", ".kkjjjjppk.", "..kkkkkkk..", "...........",
-    "...........", "...........", "...........", "...........",
-    "...........", "...........",
+    "................", "....kkkkkk......", "...kjjjjjjkkkk..", "..kjjjjjjjhhhhk.",
+    ".kppppjjjjhhffk.", "kcppppkkkkkkkk..", "kk.kkk..........", "................",
   ],
 };
+// The cycle a running player walks through. Two contact frames and two
+// passes, so the legs read as a stride rather than a flicker.
+const RUN_CYCLE = ["run1", "run2", "run3", "stand"];
 const BALL_ART = [".bbb.", "bblbb", "bblbb", ".bbb."];
 
 const PAL_STATIC = { k: "#101418", c: "#171B1F", s: "#C98F63", b: "#7B4A22", l: "#F0EDE4" };
@@ -427,7 +451,7 @@ function sprite(name, team, unit) {
   const key = name + "|" + team.ab + "|" + unit;
   let hit = spriteCache.get(key);
   if (hit) return hit;
-  const grid = ART[name];
+  const grid = ART[name] || ART.stand;
   const pal = Object.assign({}, PAL_STATIC, {
     h: team.helmet, j: team.jersey, t: team.trim, p: team.pants,
   });
@@ -668,6 +692,86 @@ const PLAYS = [
     ],
   },
 ];
+// The second page of the book. Same vocabulary, different answers.
+PLAYS.push(
+  {
+    id: "post", name: "POST", kind: "pass", tag: "SHOT",
+    blurb: "Break it in behind the safety.",
+    form: GUN, gain: 18, develop: 2.2,
+    jobs: [
+      { t: "drop", depth: 6 },
+      { t: "route", route: [R(-3, 5), R(-6, 12, 0.9)] },
+      { t: "route", route: [R(0, 14), R(7, 26)] },
+      { t: "route", route: [R(0, 10), R(-2, 20)] },
+      { t: "route", route: [R(2, 7), R(4, 14, 0.9)] },
+      { t: "pass" }, { t: "pass" },
+    ],
+  },
+  {
+    id: "out", name: "OUT", kind: "pass", tag: "SIDELINE",
+    blurb: "Break it out and get the clock stopped.",
+    form: GUN, gain: 12, develop: 1.8,
+    jobs: [
+      { t: "drop", depth: 5 },
+      { t: "route", route: [R(-5, 3), R(-8, 4, 0.8)] },
+      { t: "route", route: [R(0, 11), R(-6, 12, 0.85)] },
+      { t: "route", route: [R(0, 11), R(6, 12, 0.85)] },
+      { t: "route", route: [R(1, 6), R(4, 7, 0.8)] },
+      { t: "pass" }, { t: "pass" },
+    ],
+  },
+  {
+    id: "draw", name: "DRAW", kind: "run", tag: "DELAY",
+    blurb: "Show pass, then hand it off late.",
+    form: GUN, gain: 7, develop: 0.9,
+    jobs: [
+      { t: "hand" },
+      { t: "carry", route: [R(0, -1), R(1, 3), R(1.5, 10)] },
+      { t: "route", route: [R(-2, 12, 0.9)] },
+      { t: "route", route: [R(2, 12, 0.9)] },
+      { t: "block", bias: 0.5 }, { t: "block", bias: -0.4 }, { t: "block", bias: 0.4 },
+    ],
+  },
+  {
+    id: "boot", name: "BOOTLEG", kind: "pass", tag: "ROLL",
+    blurb: "Fake the run and roll out right.",
+    form: UNDER, gain: 13, develop: 1.9,
+    jobs: [
+      { t: "drop", depth: 3 },
+      { t: "delay", wait: 0.5, route: [R(4, 2), R(9, 4, 0.9)] },
+      { t: "route", route: [R(0, 9), R(5, 16)] },
+      { t: "route", route: [R(-2, 5), R(-9, 7, 0.85)] },
+      { t: "route", route: [R(3, 4), R(9, 6, 0.9)] },
+      { t: "pass" }, { t: "pass" },
+    ],
+  },
+  {
+    id: "mesh", name: "MESH", kind: "pass", tag: "PICK",
+    blurb: "Two crossers rub the coverage off.",
+    form: GUN, gain: 9, develop: 1.6,
+    jobs: [
+      { t: "drop", depth: 4 },
+      { t: "route", route: [R(-3, 2), R(-8, 3, 0.85)] },
+      { t: "route", route: [R(0, 5), R(13, 6, 0.95)] },
+      { t: "route", route: [R(0, 6), R(-13, 7, 0.95)] },
+      { t: "route", route: [R(1, 10), R(3, 16)] },
+      { t: "pass" }, { t: "pass" },
+    ],
+  },
+  {
+    id: "flood", name: "FLOOD", kind: "pass", tag: "LEVELS",
+    blurb: "Three men, three depths, one side.",
+    form: GUN, gain: 14, develop: 2.0,
+    jobs: [
+      { t: "drop", depth: 5 },
+      { t: "route", route: [R(5, 1), R(11, 3, 0.9)] },
+      { t: "route", route: [R(0, 18), R(6, 24)] },
+      { t: "route", route: [R(0, 8), R(11, 11, 0.9)] },
+      { t: "route", route: [R(2, 4), R(8, 5, 0.85)] },
+      { t: "pass" }, { t: "pass" },
+    ],
+  },
+);
 const playById = id => PLAYS.find(p => p.id === id) || PLAYS[0];
 
 /* Defensive schemes. The CPU picks one by down and distance; you never
@@ -844,7 +948,7 @@ function makePlay(o) {
 
   S.qbHasIt = () => {
     const c = carrier();
-    return !!c && c.idx === 0 && !S.turnover && play.kind === "pass" && !S.threw && c.y <= S.los + 0.3;
+    return !!c && c.idx === 0 && !S.turnover && play.kind === "pass" && !S.threw && !S.tucked;
   };
 
   // ----- snap ----------------------------------------------------------
@@ -1490,8 +1594,9 @@ function makePlay(o) {
     }
 
     if (input.tuck && S.qbHasIt()) S.tucked = true;
-    // Hold it too long and he pulls it down on his own.
-    if (!S.tucked && S.qbHasIt() && S.t > play.develop + 2.6) S.tucked = true;
+    // Hold it too long and he pulls it down on his own — but never out from
+    // under a thumb that is mid-drag and about to throw.
+    if (!S.tucked && !input.aiming && S.qbHasIt() && S.t > play.develop + 3.2) S.tucked = true;
     if (S.windup >= 0) { S.windup -= dt; if (S.windup <= 0) release(); }
     else if (input.throwTo) S.throwTo(input.throwTo.x, input.throwTo.y);
 
@@ -1716,11 +1821,24 @@ function finishTry(good, points) {
 /* ---- kicking ------------------------------------------------------ */
 function beginKick(kind) {
   const s = G.st;
+  if (kind === "xp") { s.los = FIELD.oppGoal - 15; s.ballX = FIELD.midY; }
   const dist = kind === "xp" ? 32 : fgDistance();
+  const spotY = s.los - 7, spotX = FIELD.midY;
+
+  // The unit, so a kick looks like a snap rather than a slot machine.
+  const players = [];
+  for (const dx of [-5, -2.5, 0, 2.5, 5])
+    players.push({ x: spotX + dx, y: s.los, side: "off", role: "line" });
+  players.push({ x: spotX + 0.9, y: spotY, side: "off", role: "hold" });
+  players.push({ x: spotX - 1.8, y: spotY - 2.4, side: "off", role: "kicker" });
+  for (const dx of [-6, -3.5, -1, 1.5, 4, 6.5])
+    players.push({ x: spotX + dx, y: s.los + 2.2, side: "def", role: "rush", y0: s.los + 2.2 });
+  players.push({ x: spotX, y: s.los + 4.4, side: "def", role: "rush", y0: s.los + 4.4 });
+
   s.kick = {
-    kind, dist,
+    kind, dist, spotY, spotX, players, t: 0,
     wind: RNG.range(-CFG.kickWindMax, CFG.kickWindMax),
-    aimX: 0, power: 0, charging: false, flight: null,
+    aimX: 0, power: 0, flight: null,
     range: scaled(s.myRoster.k.r.pow, CFG.kickRangeMin, CFG.kickRangeMax),
   };
   s.phase = "kick";
@@ -1730,11 +1848,15 @@ function resolveKick(aimX, power) {
   const s = G.st, k = s.kick;
   // Wind pushes the ball; a steadier kicker holds his line better.
   const steady = clamp(s.myRoster.k.r.awr / 99, 0.3, 1);
-  const drift = k.wind * (k.dist / 40) * (1.5 - steady);
-  const landX = aimX + drift;
-  const hasLeg = k.dist <= k.range * (0.55 + 0.5 * power);
-  const good = hasLeg && Math.abs(landX) <= 3.1;
-  k.flight = { t: 0, good, hasLeg, landX, power };
+  const drift = k.wind * (k.dist / 40) * (1.7 - steady) * 1.6;
+  // Everything past the mark on the power bar buys distance with accuracy.
+  const slam = Math.max(0, power - 0.88) * 26;
+  let landX = aimX + drift;
+  landX += landX >= 0 ? slam : -slam;
+
+  const hasLeg = k.dist <= k.range * (0.58 + 0.46 * power);
+  const good = hasLeg && Math.abs(landX) <= FIELD.uprightHalf;
+  k.flight = { t: 0, dur: 0.85, good, hasLeg, landX, power };
   Sound.kick();
   return good;
 }
@@ -1888,8 +2010,15 @@ function punt() {
 }
 
 /* ===================================================================
-   RENDER — everything is drawn in art pixels and blitted at an integer
-   scale, which is what keeps the sprites from shimmering on a phone.
+   RENDER — the field runs left to right and the phone is held on its
+   side. The simulation still thinks in "y is downfield, x is across";
+   the rotation lives here and in the input handler, and nowhere else.
+
+   Everything is drawn in art pixels, but positions are rounded to
+   DEVICE pixels rather than art pixels. Sprites are pre-baked at the
+   art scale and blitted 1:1, so they stay crisp while moving on a grid
+   six times finer — which is the difference between smooth and choppy
+   at this zoom.
    =================================================================== */
 const COL = {
   night: "#0E141A", night2: "#141C24", panel: "#1A242E", panelHi: "#22303C",
@@ -1900,21 +2029,25 @@ const COL = {
 
 const cv = document.getElementById("screen");
 const ctx = cv.getContext("2d", { alpha: false });
-let UNIT = 3, ARTW = 176, ARTH = 320, PPY = 6, VIEWTOP = 0, VIEWH = 0;
+let UNIT = 5, ARTW = 500, ARTH = 230, PPY = 7, VIEWTOP = 0, VIEWH = 0;
+let NEEDS_ROTATE = false;
 let fieldCv = null, fieldKey = "";
+
+// Art units → device pixels. Rounding here rather than in art space is
+// what makes motion smooth instead of stepping a whole art pixel at a time.
+const D = a => Math.round(a * UNIT);
 
 function resize() {
   const shell = document.getElementById("shell");
-  const cssW = shell.clientWidth, cssH = shell.clientHeight;
+  const cssW = Math.max(1, shell.clientWidth), cssH = Math.max(1, shell.clientHeight);
   const dpr = Math.min(3, window.devicePixelRatio || 1);
 
-  // A phone-shaped surface: full bleed on a phone, a device panel on a desktop.
-  const maxW = Math.min(cssW, Math.max(320, cssH * 0.52));
-  const useW = Math.floor(maxW), useH = Math.floor(cssH);
+  // Landscape game: the field's width fits the screen's height.
+  NEEDS_ROTATE = cssW < cssH * 1.15;
 
-  UNIT = Math.max(2, Math.round(useW * dpr / CFG.artW));
-  ARTW = Math.floor(useW * dpr / UNIT);
-  ARTH = Math.floor(useH * dpr / UNIT);
+  UNIT = Math.max(2, Math.round(cssH * dpr / CFG.artH));
+  ARTH = Math.floor(cssH * dpr / UNIT);
+  ARTW = Math.floor(cssW * dpr / UNIT);
 
   cv.width = ARTW * UNIT;
   cv.height = ARTH * UNIT;
@@ -1922,14 +2055,15 @@ function resize() {
   cv.style.height = (cv.height / dpr) + "px";
   ctx.imageSmoothingEnabled = false;
 
-  PPY = ARTW / FIELD.W;
-  VIEWTOP = 20;                      // the scoreboard strip
+  VIEWTOP = Math.round(ARTH * 0.1);
   VIEWH = ARTH - VIEWTOP;
-  fieldKey = "";                     // force a field rebuild at the new scale
+  PPY = VIEWH / FIELD.W;
+  fieldKey = "";
   textCache.clear();
   spriteCache.clear();
 }
 window.addEventListener("resize", resize);
+window.addEventListener("orientationchange", () => setTimeout(resize, 120));
 
 /* ---- text -------------------------------------------------------- */
 const textCache = new Map();
@@ -1951,7 +2085,7 @@ function textCanvas(str, color) {
     }
     ox += GW + TRACK;
   }
-  if (textCache.size > 400) textCache.clear();
+  if (textCache.size > 500) textCache.clear();
   textCache.set(key, c);
   return c;
 }
@@ -1960,18 +2094,16 @@ function text(str, x, y, { scale = 1, color = COL.ink, align = 0, shadow = true 
   if (!str) return;
   const c = textCanvas(str, color);
   const w = c.width * scale, h = c.height * scale;
-  const px = Math.round(align < 0 ? x : align > 0 ? x - w : x - w / 2);
-  const py = Math.round(y);
+  const ax = align < 0 ? x : align > 0 ? x - w : x - w / 2;
   if (shadow) {
     const sc = textCanvas(str, "#080B0E");
-    ctx.drawImage(sc, 0, 0, sc.width, sc.height,
-                  (px + 1) * UNIT, (py + 1) * UNIT, w * UNIT, h * UNIT);
+    ctx.drawImage(sc, 0, 0, sc.width, sc.height, D(ax + 1), D(y + 1), D(w), D(h));
   }
-  ctx.drawImage(c, 0, 0, c.width, c.height, px * UNIT, py * UNIT, w * UNIT, h * UNIT);
+  ctx.drawImage(c, 0, 0, c.width, c.height, D(ax), D(y), D(w), D(h));
 }
 const rect = (x, y, w, h, col) => {
   ctx.fillStyle = col;
-  ctx.fillRect(Math.round(x) * UNIT, Math.round(y) * UNIT, Math.round(w) * UNIT, Math.round(h) * UNIT);
+  ctx.fillRect(D(x), D(y), Math.max(UNIT, D(w)), Math.max(UNIT, D(h)));
 };
 function panel(x, y, w, h, fill = COL.panel, edge = COL.edge) {
   rect(x - 1, y - 1, w + 2, h + 2, edge);
@@ -1980,152 +2112,201 @@ function panel(x, y, w, h, fill = COL.panel, edge = COL.edge) {
 
 /* ---- the field, baked once --------------------------------------- */
 function buildField() {
-  const key = G.st.my.ab + G.st.opp.ab + "|" + ARTW + "|" + UNIT;
+  const key = G.st.my.ab + G.st.opp.ab + "|" + VIEWH + "|" + UNIT;
   if (fieldKey === key) return;
   fieldKey = key;
 
-  const w = ARTW, h = Math.ceil(FIELD.L * PPY);
+  // A margin of turf beyond each back line, so the camera can pan far enough
+  // to show the goalposts instead of pinning them to the screen edge.
+  const w = Math.ceil((FIELD.L + FIELD_MARGIN * 2) * PPY), h = VIEWH;
   fieldCv = document.createElement("canvas");
   fieldCv.width = w * UNIT; fieldCv.height = h * UNIT;
   const g = fieldCv.getContext("2d");
   g.imageSmoothingEnabled = false;
-  const R = (x, y, ww, hh, c) => { g.fillStyle = c; g.fillRect(Math.round(x) * UNIT, Math.round(y) * UNIT, Math.max(1, Math.round(ww)) * UNIT, Math.max(1, Math.round(hh)) * UNIT); };
-  const Y = fy => (FIELD.L - fy) * PPY;   // field yards → canvas row
+  const R = (x, y, ww, hh, c) => {
+    g.fillStyle = c;
+    g.fillRect(Math.round(x * UNIT), Math.round(y * UNIT),
+               Math.max(UNIT, Math.round(ww * UNIT)), Math.max(UNIT, Math.round(hh * UNIT)));
+  };
+  const X = fy => (fy + FIELD_MARGIN) * PPY;   // field length → canvas column
+  const Y = fx => (FIELD.W - fx) * PPY;        // field width  → canvas row
 
-  R(0, 0, w, h, COL.turf);
-  // Mow stripes every five yards between the goal lines.
+  R(0, 0, w, h, COL.turfDark);                 // the margin, behind the posts
+  R(X(0), 0, FIELD.L * PPY, h, COL.turf);
   for (let y = FIELD.ownGoal; y < FIELD.oppGoal; y += 10)
-    R(0, Y(y + 5), w, 5 * PPY, COL.mow);
+    R(X(y + 5), 0, 5 * PPY, h, COL.mow);
 
-  // End zones in team colours: yours at the bottom, theirs at the top.
-  R(0, Y(FIELD.L), w, FIELD.EZ * PPY, G.st.opp.jersey);
-  R(0, Y(FIELD.ownGoal), w, FIELD.EZ * PPY, G.st.my.jersey);
+  // End zones: yours on the left, theirs on the right, because you drive right.
+  R(0, 0, X(FIELD.ownGoal), h, G.st.my.jersey);
+  R(X(FIELD.oppGoal), 0, w - X(FIELD.oppGoal), h, G.st.opp.jersey);
 
-  // End-zone lettering, rotated to run across the back of each zone.
-  const nameFor = (t, y, up) => {
-    const c = textCanvas(t.nick.slice(0, 10), t.trim);
-    const scale = Math.max(1, Math.floor(w / (c.width + 8)));
+  // End-zone lettering, rotated to run up the back of each zone.
+  const nameFor = (t, cxArt, flip) => {
+    const c = textCanvas(t.nick.slice(0, 11), t.trim);
+    const scale = Math.max(1, Math.floor((h - 8) / c.width));
     const dw = c.width * scale, dh = c.height * scale;
     g.save();
-    g.translate(w * UNIT / 2, (y + (up ? -1 : 1) * 0) * UNIT);
-    g.rotate(up ? 0 : Math.PI);
-    g.drawImage(c, 0, 0, c.width, c.height, -dw * UNIT / 2, -dh * UNIT / 2, dw * UNIT, dh * UNIT);
+    g.translate(Math.round(cxArt * UNIT), Math.round((h / 2) * UNIT));
+    g.rotate(flip ? Math.PI / 2 : -Math.PI / 2);
+    g.drawImage(c, 0, 0, c.width, c.height,
+                -dw * UNIT / 2, -dh * UNIT / 2, dw * UNIT, dh * UNIT);
     g.restore();
   };
-  nameFor(G.st.opp, Y(FIELD.oppGoal + FIELD.EZ / 2), false);
-  nameFor(G.st.my, Y(FIELD.ownGoal - FIELD.EZ / 2), true);
+  nameFor(G.st.my, X(FIELD.ownGoal / 2), false);
+  nameFor(G.st.opp, X(FIELD.oppGoal + FIELD.EZ / 2), true);
 
-  const thick = Math.max(1, Math.round(PPY * 0.28));
+  const thick = Math.max(1, Math.round(PPY * 0.24));
   for (let y = FIELD.ownGoal; y <= FIELD.oppGoal + 0.01; y += 5) {
     const goal = (y === FIELD.ownGoal || y === FIELD.oppGoal);
-    R(0, Y(y) - (goal ? thick : thick / 2), w, goal ? thick * 2 : thick, COL.chalk);
+    R(X(y) - (goal ? thick : thick / 2), 0, goal ? thick * 2 : thick, h, COL.chalk);
   }
   // Hash marks, one per yard.
   for (let y = FIELD.ownGoal + 1; y < FIELD.oppGoal; y++) {
     if (y % 5 === 0) continue;
-    R(FIELD.W * 0.36 * PPY, Y(y), 1.4 * PPY, 1, COL.chalkDim);
-    R(FIELD.W * 0.64 * PPY, Y(y), 1.4 * PPY, 1, COL.chalkDim);
+    R(X(y), Y(FIELD.W * 0.64), 1, 1.4 * PPY, COL.chalkDim);
+    R(X(y), Y(FIELD.W * 0.36) - 1.4 * PPY, 1, 1.4 * PPY, COL.chalkDim);
   }
-  // Painted numbers down both sidelines.
+  // Painted numbers down both sidelines, rotated to face in from the touchline.
   for (let y = FIELD.ownGoal + 10; y <= FIELD.oppGoal - 10; y += 10) {
     const toGoal = FIELD.oppGoal - y;
-    const n = String(toGoal > 50 ? 100 - toGoal : toGoal);
-    const c = textCanvas(n, COL.chalkDim);
-    const s = Math.max(1, Math.round(PPY * 0.35));
-    g.drawImage(c, 0, 0, c.width, c.height,
-                Math.round(2.6 * PPY) * UNIT, Math.round(Y(y) - c.height * s / 2) * UNIT,
-                c.width * s * UNIT, c.height * s * UNIT);
-    g.drawImage(c, 0, 0, c.width, c.height,
-                Math.round(FIELD.W * PPY - 2.6 * PPY - c.width * s) * UNIT,
-                Math.round(Y(y) - c.height * s / 2) * UNIT,
-                c.width * s * UNIT, c.height * s * UNIT);
+    const label = String(toGoal > 50 ? 100 - toGoal : toGoal);
+    const c = textCanvas(label, COL.chalkDim);
+    const scale = Math.max(1, Math.round(PPY * 0.28));
+    const dw = c.width * scale, dh = c.height * scale;
+    for (const [rowY, rot] of [[Y(FIELD.W - 4.5), -Math.PI / 2], [Y(4.5), Math.PI / 2]]) {
+      g.save();
+      g.translate(Math.round(X(y) * UNIT), Math.round(rowY * UNIT));
+      g.rotate(rot);
+      g.drawImage(c, 0, 0, c.width, c.height,
+                  -dw * UNIT / 2, -dh * UNIT / 2, dw * UNIT, dh * UNIT);
+      g.restore();
+    }
   }
   // Sidelines.
-  R(0, 0, 1, h, COL.chalk);
-  R(w - 1, 0, 1, h, COL.chalk);
+  R(X(0), 0, FIELD.L * PPY, 1, COL.chalk);
+  R(X(0), h - 1, FIELD.L * PPY, 1, COL.chalk);
+
+  // Goalposts on both back lines.
+  for (const backY of [0, FIELD.L]) {
+    const gx = X(backY);
+    const top = Y(FIELD.midY + FIELD.uprightHalf), bot = Y(FIELD.midY - FIELD.uprightHalf);
+    R(gx - 1, top, 2, bot - top, COL.chalk);
+    const stub = backY === 0 ? -4 : 2;
+    R(gx + stub, top - 1, 4, 2, COL.goalpost || "#E8C63A");
+    R(gx + stub, bot - 1, 4, 2, COL.goalpost || "#E8C63A");
+  }
 }
 
 /* ---- camera ------------------------------------------------------ */
-let camY = 0;
+const FIELD_MARGIN = 9;      // yards of turf drawn beyond each back line
+let camX = 0;
 function focusY() {
   const s = G.st;
+  // On a kick, sit between the tee and the posts so you can see what you are
+  // aiming at.
+  if (s.phase === "kick" && s.kick) return (s.kick.spotY + FIELD.L) / 2 - 4;
   if (G.play && !G.play.over) {
-    const c = G.play.ball;
-    return c.y + (G.play.ball.state === "held" ? 3 : 0);
+    const b = G.play.ball;
+    return b.y + (b.state === "held" ? 4 : 0);
   }
-  return s.los + 6;
+  return s.los + 8;
 }
 function updateCamera(dt, snap) {
-  const fieldH = FIELD.L * PPY;
-  const target = clamp((FIELD.L - focusY()) * PPY - VIEWH * 0.62, 0, Math.max(0, fieldH - VIEWH));
-  if (snap) camY = target;
-  else camY += (target - camY) * (1 - Math.pow(0.002, dt));
+  const fieldW = (FIELD.L + FIELD_MARGIN * 2) * PPY;
+  const target = clamp((focusY() + FIELD_MARGIN) * PPY - ARTW * 0.38,
+                       0, Math.max(0, fieldW - ARTW));
+  if (snap) camX = target;
+  else camX += (target - camX) * (1 - Math.pow(0.0016, dt));
 }
-const sx = fx => fx * PPY;
-const sy = fy => VIEWTOP + (FIELD.L - fy) * PPY - camY;
+// Field point → screen. These two are the entire rotation.
+const scrX = fy => (fy + FIELD_MARGIN) * PPY - camX;
+const scrY = fx => VIEWTOP + (FIELD.W - fx) * PPY;
 
 /* ---- the play ---------------------------------------------------- */
 function drawField() {
   const shake = G.play ? G.play.shake : 0;
-  const ox = shake > 0 ? Math.round((Math.random() - 0.5) * shake * 6) : 0;
-  const oy = shake > 0 ? Math.round((Math.random() - 0.5) * shake * 6) : 0;
-  ctx.drawImage(fieldCv, 0, Math.round((camY - oy)) * UNIT, ARTW * UNIT, VIEWH * UNIT,
-                ox * UNIT, VIEWTOP * UNIT, ARTW * UNIT, VIEWH * UNIT);
+  const ox = shake > 0 ? Math.round((Math.random() - 0.5) * shake * 7) : 0;
+  const oy = shake > 0 ? Math.round((Math.random() - 0.5) * shake * 7) : 0;
+  ctx.drawImage(fieldCv, D(camX - ox), 0, D(ARTW), D(VIEWH),
+                0, D(VIEWTOP + oy), D(ARTW), D(VIEWH));
 }
 
 function drawLines() {
   const s = G.st;
   if (s.phase === "defense" || s.phase === "final") return;
-  const losY = sy(s.los);
-  if (losY > VIEWTOP - 4 && losY < ARTH + 4) rect(0, losY, ARTW, 1, "#7FB6E8");
+  const lx = scrX(s.los);
+  if (lx > -4 && lx < ARTW + 4) rect(lx, VIEWTOP, 1, VIEWH, "#7FB6E8");
   if (s.poss === "us" && s.lineToGain < FIELD.oppGoal - 0.01) {
-    const gy = sy(s.lineToGain);
-    if (gy > VIEWTOP - 4 && gy < ARTH + 4) rect(0, gy, ARTW, 1, COL.flood);
+    const gx = scrX(s.lineToGain);
+    if (gx > -4 && gx < ARTW + 4) rect(gx, VIEWTOP, 1, VIEWH, COL.flood);
   }
 }
 
-function drawPlayers() {
+function drawPlayers(dt) {
   const sim = G.play;
   if (!sim) return;
-  const order = sim.P.slice().sort((a, b) => b.y - a.y);   // nearer players on top
+  // Players nearer the bottom touchline overlap those behind them.
+  const order = sim.P.slice().sort((a, b) => b.x - a.x);
+  const ball = ballSprite(UNIT);
+
   for (const p of order) {
     const team = p.side === "off" ? G.st.my : G.st.opp;
-    const frame = p.mot === "down" ? "down"
-      : p.mot === "engaged" ? "block"
-      : (Math.hypot(p.vx, p.vy) > 0.6 && Math.floor(sim.t * 9) % 2 === 0) ? "run1" : "run2";
+    const speed = Math.hypot(p.vx, p.vy);
+
+    // Stride advances with ground covered, so a lineman's legs turn over
+    // slower than a receiver's without a second animation table.
+    p._stride = (p._stride || 0) + speed * dt;
+    let frame;
+    if (p.mot === "down") frame = "down";
+    else if (p.mot === "engaged") frame = "block";
+    else if (speed < 0.6) frame = "stand";
+    else frame = RUN_CYCLE[Math.floor(p._stride / 0.85) % RUN_CYCLE.length];
+
     const sp = sprite(frame, team, UNIT);
-    const px = Math.round(sx(p.x) - sp.w / 2);
-    const py = Math.round(sy(p.y) - sp.h + 2);
-    if (py < VIEWTOP - 20 || py > ARTH + 6) continue;
+    const cxA = scrX(p.y), cyA = scrY(p.x);
+    if (cxA < -30 || cxA > ARTW + 30) continue;
 
-    // A soft shadow so bodies sit on the turf instead of floating.
+    // Shadow first, so bodies sit on the turf rather than float.
     ctx.fillStyle = COL.shadow;
-    ctx.fillRect(Math.round(sx(p.x) - 3) * UNIT, Math.round(sy(p.y) - 1) * UNIT, 6 * UNIT, 2 * UNIT);
-    ctx.drawImage(sp.canvas, px * UNIT, py * UNIT, sp.w * UNIT, sp.h * UNIT);
+    ctx.fillRect(D(cxA - 4), D(cyA - 1.5), D(8), D(3));
 
-    if (p.id === sim.user && p.mot !== "down") rect(sx(p.x) - 4, sy(p.y) + 1, 8, 1, COL.flood);
+    const faceLeft = Math.sin(p.face) < 0;
+    const dx = D(cxA - sp.w / 2), dy = D(cyA - sp.h + 2);
+    if (faceLeft) {
+      ctx.save();
+      ctx.translate(dx + sp.w * UNIT, dy);
+      ctx.scale(-1, 1);
+      ctx.drawImage(sp.canvas, 0, 0);
+      ctx.restore();
+    } else {
+      ctx.drawImage(sp.canvas, dx, dy);
+    }
+
+    if (p.id === sim.user && p.mot !== "down") {
+      ctx.fillStyle = COL.flood;
+      ctx.fillRect(D(cxA - 5), D(cyA + 1), D(10), UNIT);
+    }
     if (p.hasBall && p.mot !== "down") {
-      const b = ballSprite(UNIT);
-      ctx.drawImage(b.canvas, Math.round(sx(p.x) + 3) * UNIT, Math.round(sy(p.y) - 8) * UNIT,
-                    b.w * UNIT, b.h * UNIT);
+      ctx.drawImage(ball.canvas, D(cxA + (faceLeft ? -6 : 2)), D(cyA - 9));
     }
   }
 
-  // Receiver markers while you still have a throw available.
+  // Markers over the men you can still throw to.
   if (sim.qbHasIt() && !sim.tucked) {
     for (const r of sim.targets()) {
-      rect(sx(r.x) - 1, sy(r.y) - sprite("run2", G.st.my, UNIT).h - 3, 3, 3, G.st.my.trim);
+      const mx = scrX(r.y), my = scrY(r.x) - 20;
+      rect(mx - 1.5, my, 3, 3, COL.ink);
+      rect(mx - 1, my + 0.5, 2, 2, G.st.my.trim);
     }
   }
 
   const b = sim.ball;
   if (b.state === "air" || b.state === "loose") {
-    const bs = ballSprite(UNIT);
+    const bx = scrX(b.y), by = scrY(b.x);
     const lift = b.h * PPY * 0.9;
     ctx.fillStyle = COL.shadow;
-    ctx.fillRect(Math.round(sx(b.x) - 2) * UNIT, Math.round(sy(b.y) - 1) * UNIT, 4 * UNIT, 2 * UNIT);
-    ctx.drawImage(bs.canvas, Math.round(sx(b.x) - bs.w / 2) * UNIT,
-                  Math.round(sy(b.y) - lift - bs.h) * UNIT, bs.w * UNIT, bs.h * UNIT);
+    ctx.fillRect(D(bx - 3), D(by - 1.5), D(6), D(3));
+    ctx.drawImage(ball.canvas, D(bx - ball.w / 2), D(by - lift - ball.h));
   }
 }
 
@@ -2133,18 +2314,18 @@ function drawAim() {
   const sim = G.play, aim = Input.aim;
   if (!sim || !aim || !sim.qbHasIt() || sim.tucked) return;
   const qb = sim.P[0];
-  const ax = sx(aim.x), ay = sy(aim.y);
-  // Dotted line from the arm to the spot, then a crosshair on the spot.
-  const span = Math.hypot(ax - sx(qb.x), ay - sy(qb.y));
-  const steps = Math.max(6, Math.min(26, Math.round(span / 9)));
+  const ax = scrX(aim.y), ay = scrY(aim.x);
+  const qx = scrX(qb.y), qy = scrY(qb.x);
+
+  const span = Math.hypot(ax - qx, ay - qy);
+  const steps = Math.max(6, Math.min(28, Math.round(span / 10)));
   for (let i = 1; i <= steps; i++) {
     const t = i / (steps + 1);
-    const px = lerp(sx(qb.x), ax, t), py = lerp(sy(qb.y), ay, t);
-    rect(px - 1.5, py - 1.5, 3, 3, COL.ink);        // dark backing, for turf
+    const px = lerp(qx, ax, t), py = lerp(qy, ay, t);
+    rect(px - 1.5, py - 1.5, 3, 3, COL.ink);
     rect(px - 1, py - 1, 2, 2, COL.flood);
   }
-  // Crosshair, drawn dark-then-light so it reads on any part of the field.
-  const arms = [[-8, -1, 6, 2], [3, -1, 6, 2], [-1, -8, 2, 6], [-1, 3, 2, 6]];
+  const arms = [[-9, -1, 7, 2], [3, -1, 7, 2], [-1, -9, 2, 7], [-1, 3, 2, 7]];
   for (const [ox, oy, w, h] of arms) rect(ax + ox - 1, ay + oy - 1, w + 2, h + 2, COL.ink);
   for (const [ox, oy, w, h] of arms) rect(ax + ox, ay + oy, w, h, COL.flood);
   rect(ax - 3, ay - 3, 6, 6, COL.ink);
@@ -2156,32 +2337,42 @@ function drawHUD() {
   const s = G.st;
   rect(0, 0, ARTW, VIEWTOP, COL.night2);
   rect(0, VIEWTOP - 1, ARTW, 1, COL.edge);
+  const mid = Math.round(VIEWTOP / 2 - GH / 2);
 
-  rect(2, 3, 3, 8, s.my.trim);
-  text(s.my.ab, 7, 3, { align: -1, scale: 1, color: COL.ink });
-  text(String(s.us), 7, 11, { align: -1, scale: 1, color: COL.flood });
+  rect(3, 3, 3, VIEWTOP - 6, s.my.trim);
+  text(s.my.ab, 10, mid, { align: -1, color: COL.ink });
+  text(String(s.us), 10 + textW(s.my.ab) + 8, mid, { align: -1, color: COL.flood });
 
-  rect(ARTW - 5, 3, 3, 8, s.opp.trim);
-  text(s.opp.ab, ARTW - 7, 3, { align: 1, scale: 1, color: COL.ink });
-  text(String(s.them), ARTW - 7, 11, { align: 1, scale: 1, color: COL.flood });
+  rect(ARTW - 6, 3, 3, VIEWTOP - 6, s.opp.trim);
+  text(s.opp.ab, ARTW - 10, mid, { align: 1, color: COL.ink });
+  text(String(s.them), ARTW - 10 - textW(s.opp.ab) - 8, mid, { align: 1, color: COL.flood });
 
   const m = Math.max(0, Math.ceil(s.clock));
   const clock = Math.floor(m / 60) + ":" + String(m % 60).padStart(2, "0");
-  text(clock, ARTW / 2, 2, { scale: 1, color: COL.ink });
-  const qLabel = "Q" + clamp(s.q, 1, 4);
-  const line = s.poss === "us" ? qLabel + "  " + downText() + "  " + fieldLabel(s.los, true)
-                               : qLabel + "  " + s.opp.ab + " BALL";
-  text(line, ARTW / 2, 11, { scale: 1, color: COL.dim });
+  const line = s.poss === "us"
+    ? "Q" + clamp(s.q, 1, 4) + "   " + clock + "   " + downText() + "   " + fieldLabel(s.los, true)
+    : "Q" + clamp(s.q, 1, 4) + "   " + clock + "   " + s.opp.ab + " BALL";
+  text(line, ARTW / 2, mid, { color: COL.ink });
 }
 
 function drawBanner() {
   if (!G.banner || G.bannerT <= 0) return;
   const t = G.banner;
   const col = t.tone === "good" ? COL.good : t.tone === "bad" ? COL.bad : COL.flood;
-  const w = textW(t.text) * 2 + 16;
-  const y = Math.round(VIEWTOP + VIEWH * 0.34);
-  panel(ARTW / 2 - w / 2, y, w, 20, COL.night, col);
-  text(t.text, ARTW / 2, y + 6, { scale: 2, color: col });
+  const w = textW(t.text) * 2 + 18;
+  const y = Math.round(VIEWTOP + VIEWH * 0.16);
+  panel(ARTW / 2 - w / 2, y, w, 22, COL.night, col);
+  text(t.text, ARTW / 2, y + 7, { scale: 2, color: col });
+}
+
+function drawRotatePrompt() {
+  rect(0, 0, ARTW, ARTH, COL.night);
+  const cx = ARTW / 2, cy = ARTH / 2;
+  // A little phone, lying down.
+  panel(cx - 22, cy - 26, 44, 26, COL.panel, COL.flood);
+  rect(cx - 16, cy - 20, 32, 14, COL.turf);
+  text("TURN YOUR PHONE", cx, cy + 12, { scale: 2, color: COL.flood });
+  text("PIXEL BOWL IS PLAYED SIDEWAYS", cx, cy + 30, { color: COL.dim });
 }
 
 /* ===================================================================
@@ -2195,251 +2386,329 @@ function button(id, x, y, w, h, label, opt = {}) {
   panel(x, y + (active ? 1 : 0), w, h,
         opt.primary ? (active ? "#FFD86B" : COL.flood) : (active ? COL.panelHi : COL.panel),
         opt.edge || (opt.primary ? "#8A6C18" : COL.edge));
-  text(label, x + w / 2, y + (h - GH * (opt.scale || 1)) / 2 + (active ? 1 : 0),
-       { scale: opt.scale || 1, color: opt.primary ? "#16202A" : (opt.color || COL.ink), shadow: !opt.primary });
-  if (opt.sub) text(opt.sub, x + w / 2, y + h - 8, { scale: 1, color: opt.primary ? "#4A3B0C" : COL.dim, shadow: false });
+  const sc = opt.scale || 1;
+  const ty = y + (h - GH * sc) / 2 + (active ? 1 : 0) - (opt.sub ? 3 : 0);
+  text(label, x + w / 2, ty, { scale: sc, color: opt.primary ? "#16202A" : (opt.color || COL.ink), shadow: !opt.primary });
+  if (opt.sub) text(opt.sub, x + w / 2, y + h - 9,
+                    { color: opt.primary ? "#4A3B0C" : COL.dim, shadow: false });
 }
 const hitTest = (x, y) => HOT.find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
 
+/* ---- route diagrams ------------------------------------------------
+   A postage-stamp of the play: the line of scrimmage, a dot per man and
+   a dotted path per route. Downfield runs right, matching the field.
+   ------------------------------------------------------------------ */
+function drawRouteDiagram(play, x, y, w, h, accent) {
+  rect(x, y, w, h, COL.turfDark);
+  const losX = x + Math.round(w * 0.26);
+  rect(losX, y + 1, 1, h - 2, "#4A6B52");
+
+  const DEPTH = 26, SPAN = 30;
+  const px = fy => losX + (fy / DEPTH) * (x + w - 2 - losX);
+  const py = lat => y + h / 2 - (lat / SPAN) * (h - 4);
+
+  const trail = (ax, ay, bx, by, col) => {
+    const n = Math.max(2, Math.round(Math.hypot(bx - ax, by - ay) / 2.5));
+    for (let i = 1; i <= n; i++) {
+      const t = i / n;
+      rect(lerp(ax, bx, t) - 0.5, lerp(ay, by, t) - 0.5, 1, 1, col);
+    }
+  };
+
+  play.jobs.forEach((j, i) => {
+    const a = play.form[i];
+    const sxp = px(a.y), syp = py(a.x);
+    let route = null, col = COL.chalkDim;
+    if (j.t === "route" || j.t === "delay") { route = j.route; col = accent; }
+    else if (j.t === "carry") { route = j.route; col = COL.accentRun || "#E8613A"; }
+    else if (j.t === "drop") { route = [{ x: 0, y: -j.depth }]; col = "#6E8394"; }
+
+    let cx = sxp, cy = syp;
+    if (route) {
+      for (const n of route) {
+        const nx = px(a.y + n.y), ny = py(a.x + n.x);
+        trail(cx, cy, nx, ny, col);
+        cx = nx; cy = ny;
+      }
+    }
+    rect(sxp - 1, syp - 1, 2, 2, COL.ink);
+    rect(sxp - 0.5, syp - 0.5, 1.5, 1.5, j.t === "pass" || j.t === "block" ? COL.chalkDim : COL.text || "#E6EDF2");
+  });
+}
+
 /* ---- play call ---------------------------------------------------- */
+const PLAYS_PER_PAGE = 6;
+let playPage = 0;
+const playPages = () => Math.ceil(PLAYS.length / PLAYS_PER_PAGE);
+
 function drawPlayCall() {
   const s = G.st;
   const fourth = s.down === 4 && s.tryFor !== "us2";
-  const extra = fourth ? 22 : 0;
-  const h = 78 + extra;
-  const y0 = ARTH - h;
-  panel(0, y0, ARTW, h, COL.night2, COL.edge);
+  const sheetH = 78;
+  const y0 = ARTH - sheetH;
+  panel(0, y0, ARTW, sheetH, COL.night2, COL.edge);
 
-  text(downText() + "  ·  " + fieldLabel(s.los, true), ARTW / 2, y0 + 4, { scale: 1, color: COL.flood });
-
-  const m = 6, gap = 4, cols = 3;
-  const cw = Math.floor((ARTW - m * 2 - gap * (cols - 1)) / cols), ch = 26;
-  PLAYS.forEach((p, i) => {
-    const cx = m + (i % cols) * (cw + gap);
-    const cy = y0 + 14 + Math.floor(i / cols) * (ch + gap);
-    button("play:" + p.id, cx, cy, cw, ch, p.name, { sub: p.tag, scale: 1 });
-  });
+  text(downText() + "  ·  " + fieldLabel(s.los, true), 8, y0 + 4,
+       { align: -1, color: COL.flood });
 
   if (fourth) {
-    const by = y0 + 14 + 2 * (ch + gap);
-    const bw = Math.floor((ARTW - m * 2 - gap) / 2);
-    button("punt", m, by, bw, 18, "PUNT", { scale: 1 });
+    const bw = 62;
+    button("punt", ARTW - bw * 2 - 14, y0 + 2, bw, 13, "PUNT");
     if (inFGRange())
-      button("fg", m + bw + gap, by, bw, 18, "FIELD GOAL " + Math.round(fgDistance()), { scale: 1, primary: true });
+      button("fg", ARTW - bw - 8, y0 + 2, bw, 13, "FG " + Math.round(fgDistance()), { primary: true });
     else
-      button("nofg", m + bw + gap, by, bw, 18, "OUT OF RANGE", { scale: 1, color: COL.dim });
+      button("nofg", ARTW - bw - 8, y0 + 2, bw, 13, "NO RANGE", { color: COL.dim });
+  }
+
+  const m = 8, gap = 5, cols = PLAYS_PER_PAGE;
+  const cw = Math.floor((ARTW - m * 2 - gap * (cols - 1)) / cols);
+  const ch = sheetH - 30;
+  const cy = y0 + 18;
+  const from = playPage * PLAYS_PER_PAGE;
+  PLAYS.slice(from, from + PLAYS_PER_PAGE).forEach((play, i) => {
+    const cx = m + i * (cw + gap);
+    HOT.push({ id: "play:" + play.id, x: cx, y: cy, w: cw, h: ch });
+    const active = Input.holdId === "play:" + play.id;
+    panel(cx, cy, cw, ch, active ? COL.panelHi : COL.panel, COL.edge);
+    text(play.name, cx + cw / 2, cy + 3, { color: COL.ink });
+    drawRouteDiagram(play, cx + 3, cy + 13, cw - 6, ch - 24, G.st.my.trim);
+    text(play.tag, cx + cw / 2, cy + ch - 8, { color: COL.dim, shadow: false });
+  });
+
+  // Page dots — swipe the row to change pages.
+  const pages = playPages();
+  if (pages > 1) {
+    const dotW = 7, total = pages * dotW;
+    for (let i = 0; i < pages; i++)
+      rect(ARTW / 2 - total / 2 + i * dotW, y0 + 9, 4, 3,
+           i === playPage ? COL.flood : "#3A4753");
+    text("SWIPE", ARTW / 2 + total / 2 + 8, y0 + 8, { align: -1, color: "#4E5F6B", shadow: false });
   }
 }
 
 function drawPresnap() {
   const s = G.st;
   text("TAP TO SNAP", ARTW / 2, ARTH - 30, { scale: 2, color: COL.flood });
-  text(s.chosen.name + "  vs  " + s.scheme.name, ARTW / 2, ARTH - 14, { scale: 1, color: COL.dim });
+  text(s.chosen.name + "   vs   " + s.scheme.name, ARTW / 2, ARTH - 14, { color: COL.dim });
 }
 
 function drawLiveControls() {
   const sim = G.play;
   if (!sim || sim.over) return;
   if (sim.qbHasIt() && !sim.tucked) {
-    button("tuck", ARTW - 46, ARTH - 44, 40, 22, "RUN", { scale: 1 });
-    if (!Input.aim) text("DRAG TO AIM", ARTW / 2 - 14, ARTH - 38, { scale: 1, color: COL.dim });
+    button("tuck", ARTW - 52, ARTH - 30, 44, 22, "RUN");
+    if (!Input.aim) text("DRAG TO AIM", 10, ARTH - 22, { align: -1, color: COL.dim });
   }
 }
 
 /* ---- the try ------------------------------------------------------ */
 function drawTry() {
-  const y0 = ARTH - 56;
-  panel(0, y0, ARTW, 56, COL.night2, COL.edge);
-  text("TOUCHDOWN — TAKE YOUR POINTS", ARTW / 2, y0 + 5, { scale: 1, color: COL.flood });
-  const m = 8, gap = 6, bw = Math.floor((ARTW - m * 2 - gap) / 2);
-  button("xp", m, y0 + 16, bw, 30, "KICK", { sub: "1 POINT", primary: true, scale: 2 });
-  button("two", m + bw + gap, y0 + 16, bw, 30, "GO FOR 2", { sub: "FROM THE 2", scale: 1 });
+  const h = 54, y0 = ARTH - h;
+  panel(0, y0, ARTW, h, COL.night2, COL.edge);
+  text("TOUCHDOWN — TAKE YOUR POINTS", ARTW / 2, y0 + 5, { color: COL.flood });
+  const bw = 130, gap = 12;
+  button("xp", ARTW / 2 - bw - gap / 2, y0 + 16, bw, 30, "KICK", { sub: "1 POINT", primary: true, scale: 2 });
+  button("two", ARTW / 2 + gap / 2, y0 + 16, bw, 30, "GO FOR 2", { sub: "FROM THE 2" });
 }
 
-/* ---- kicking ------------------------------------------------------ */
+/* ---- kicking ------------------------------------------------------
+   Played on the field with the unit lined up, so it looks like a snap
+   rather than a slot machine. The rush is cosmetic — you cannot be
+   blocked — but the accuracy window is tight and the wind bites.
+   ------------------------------------------------------------------ */
 function drawKick() {
   const s = G.st, k = s.kick;
+  const postsY = FIELD.oppGoal + FIELD.EZ;      // back line, where the posts are
 
-  // The kick used to draw straight onto the turf and was unreadable over an
-  // end zone. It gets its own panel.
-  rect(0, VIEWTOP, ARTW, VIEWH, "rgba(8,11,14,.72)");
-  const pad = 8;
-  const h = Math.min(VIEWH - 40, 232);
-  const y0 = VIEWTOP + Math.round((VIEWH - h) / 2);
-  panel(pad, y0, ARTW - pad * 2, h, COL.night2, COL.edge);
-
-  const cx = ARTW / 2;
-  const barY = y0 + 80;                 // the crossbar
-  const teeY = y0 + h - 48;             // where the ball sits
-  const half = 26;                      // half the width between the posts
-
-  // A few chalk lines between the tee and the posts, so the gap reads as
-  // distance rather than as empty panel.
-  for (let i = 1; i <= 3; i++) {
-    const ly = lerp(teeY, barY + 10, i / 4);
-    rect(cx - 30 + i * 4, ly, 60 - i * 8, 1, "#20303C");
+  // The unit, drawn with the same sprites as a live play.
+  const ball = ballSprite(UNIT);
+  for (const pl of k.players) {
+    const team = pl.side === "off" ? s.my : s.opp;
+    const frame = pl.role === "kicker" && k.flight ? "run2"
+                : pl.role === "hold" ? "block"
+                : pl.side === "def" ? "run1" : "block";
+    const sp = sprite(frame, team, UNIT);
+    const cxA = scrX(pl.y), cyA = scrY(pl.x);
+    ctx.fillStyle = COL.shadow;
+    ctx.fillRect(D(cxA - 4), D(cyA - 1.5), D(8), D(3));
+    ctx.drawImage(sp.canvas, D(cxA - sp.w / 2), D(cyA - sp.h + 2));
   }
 
-  text(k.kind === "xp" ? "EXTRA POINT" : "FIELD GOAL", cx, y0 + 8,
-       { scale: 1, color: COL.dim });
-  if (k.kind !== "xp")
-    text(Math.round(k.dist) + " YARDS", cx, y0 + 20, { scale: 2, color: COL.flood });
+  // Goalposts, drawn on top of the field so they read against the crowd.
+  const gx = scrX(postsY);
+  const upY0 = scrY(FIELD.midY + FIELD.uprightHalf), upY1 = scrY(FIELD.midY - FIELD.uprightHalf);
+  rect(gx - 1, upY0, 2, upY1 - upY0, COL.chalk);
+  rect(gx - 1, upY0 - 16, 2, 17, COL.flood);
+  rect(gx - 1, upY1 - 1, 2, 17, COL.flood);
 
+  // The ball, in hand or in flight.
+  if (!k.flight) {
+    const bx = scrX(k.spotY), by = scrY(k.spotX);
+    ctx.drawImage(ball.canvas, D(bx - ball.w / 2), D(by - 6));
+  } else {
+    const f = k.flight, t = clamp(f.t / f.dur, 0, 1);
+    const fy = lerp(k.spotY, postsY, t);
+    const fx = lerp(k.spotX, FIELD.midY + f.landX, t);
+    const lift = Math.sin(t * Math.PI) * 9 + t * 3;
+    ctx.drawImage(ball.canvas, D(scrX(fy) - ball.w / 2), D(scrY(fx) - lift * PPY * 0.5 - ball.h));
+    if (t >= 1) {
+      const label = f.good ? "GOOD" : (f.hasLeg ? "WIDE" : "SHORT");
+      const w = textW(label) * 3 + 20;
+      panel(ARTW / 2 - w / 2, VIEWTOP + 14, w, 30, COL.night,
+            f.good ? COL.good : COL.bad);
+      text(label, ARTW / 2, VIEWTOP + 24, { scale: 3, color: f.good ? COL.good : COL.bad });
+    }
+  }
+
+  // Compact readout, top-left so it never covers the posts.
+  const pw = 116, ph = 34;
+  panel(8, VIEWTOP + 6, pw, ph, COL.night2, COL.edge);
+  text(k.kind === "xp" ? "EXTRA POINT" : Math.round(k.dist) + " YARDS",
+       8 + pw / 2, VIEWTOP + 10, { scale: 2, color: COL.flood });
   const w = k.wind;
   const arrow = w > 0.15 ? "▲" : w < -0.15 ? "▼" : "·";
-  text("WIND " + arrow + " " + Math.abs(w).toFixed(1), cx, y0 + 42,
-       { scale: 1, color: Math.abs(w) > 1.2 ? COL.bad : COL.dim });
+  text("WIND " + arrow + " " + Math.abs(w).toFixed(1), 8 + pw / 2, VIEWTOP + 27,
+       { color: Math.abs(w) > 1.1 ? COL.bad : COL.dim });
 
-  // Uprights.
-  rect(cx - half, barY, half * 2, 2, COL.chalk);
-  rect(cx - half, barY - 18, 2, 20, COL.flood);
-  rect(cx + half - 2, barY - 18, 2, 20, COL.flood);
+  if (k.flight) return;
 
-  const ball = ballSprite(UNIT);
-  const drawBall = (bx, by) =>
-    ctx.drawImage(ball.canvas, Math.round(bx - ball.w / 2) * UNIT, Math.round(by) * UNIT,
-                  ball.w * UNIT, ball.h * UNIT);
-
-  if (!k.flight) {
-    if (Input.down) {
-      const dx = Input.x - Input.sx, dy = Math.max(0, Input.y - Input.sy);
-      k.power = clamp(dy / 70, 0, 1);
-      k.aimX = clamp(-dx / 7, -9, 9);
-      // Live preview of the flight, so the swipe teaches itself.
-      for (let i = 1; i <= 14; i++) {
-        const t = i / 14;
-        const px = lerp(cx, cx + k.aimX * 3, t);
-        const py = lerp(teeY, barY + 4, t) - Math.sin(t * Math.PI) * 16 * k.power;
-        rect(px - 1.5, py - 1.5, 3, 3, COL.ink);
-        rect(px - 1, py - 1, 2, 2, COL.flood);
-      }
-      const bw = ARTW - pad * 2 - 28;
-      rect(cx - bw / 2, y0 + h - 28, bw, 6, COL.ink);
-      rect(cx - bw / 2, y0 + h - 28, bw * k.power, 6,
-           k.power > 0.9 ? COL.bad : COL.flood);
-      text("RELEASE", cx, y0 + h - 16, { scale: 1, color: COL.ink });
-    } else {
-      text("DRAG DOWN, THEN RELEASE", cx, y0 + h - 28, { scale: 1, color: COL.ink });
-      text("SIDEWAYS TO AIM", cx, y0 + h - 16, { scale: 1, color: COL.dim });
+  if (Input.down) {
+    const dx = Input.x - Input.sx, dy = Math.max(0, Input.y - Input.sy);
+    k.power = clamp(dy / 52, 0, 1);
+    k.aimX = clamp(-dx / 9, -7, 7);
+    // Preview, on the field, from the tee toward the posts.
+    for (let i = 1; i <= 16; i++) {
+      const t = i / 16;
+      const fy = lerp(k.spotY, postsY, t);
+      const fx = lerp(k.spotX, FIELD.midY + k.aimX, t);
+      const lift = Math.sin(t * Math.PI) * 9 * k.power;
+      const px = scrX(fy), py = scrY(fx) - lift * PPY * 0.5;
+      rect(px - 1.5, py - 1.5, 3, 3, COL.ink);
+      rect(px - 1, py - 1, 2, 2, k.power > 0.9 ? COL.bad : COL.flood);
     }
-    drawBall(cx, teeY);
+    const bw = 150;
+    rect(ARTW / 2 - bw / 2, ARTH - 22, bw, 7, COL.ink);
+    rect(ARTW / 2 - bw / 2, ARTH - 22, bw * k.power, 7,
+         k.power > 0.9 ? COL.bad : COL.flood);
+    // A mark at the point where extra power starts costing accuracy.
+    rect(ARTW / 2 - bw / 2 + bw * 0.88, ARTH - 24, 1, 11, COL.chalk);
+    text("RELEASE", ARTW / 2, ARTH - 12, { color: COL.ink });
   } else {
-    const f = k.flight;
-    const t = clamp(f.t / 0.9, 0, 1);
-    const px = lerp(cx, cx + f.landX * 3.6, t);
-    const py = lerp(teeY, barY + 2, t) - Math.sin(t * Math.PI) * 18;
-    drawBall(px, py);
-    if (t >= 1)
-      text(f.good ? "GOOD" : (f.hasLeg ? "WIDE" : "SHORT"), cx, y0 + h - 24,
-           { scale: 2, color: f.good ? COL.good : COL.bad });
+    text("DRAG DOWN, THEN RELEASE   ·   SIDEWAYS TO AIM", ARTW / 2, ARTH - 14,
+         { color: COL.ink });
   }
 }
 
 /* ---- their drive --------------------------------------------------- */
 function drawDefense() {
   const s = G.st, d = s.drive;
-  rect(0, VIEWTOP, ARTW, VIEWH, "rgba(8,11,14,.62)");
-  const h = 96, y0 = VIEWTOP + Math.round((VIEWH - h) / 2);
-  panel(8, y0, ARTW - 16, h, COL.night2, COL.edge);
-  text(s.opp.city, ARTW / 2, y0 + 6, { scale: 1, color: s.opp.trim });
-  text("HAVE THE BALL", ARTW / 2, y0 + 15, { scale: 1, color: COL.dim });
+  rect(0, VIEWTOP, ARTW, VIEWH, "rgba(8,11,14,.66)");
+  const w = Math.min(320, ARTW - 40), h = 118;
+  const x0 = Math.round((ARTW - w) / 2), y0 = VIEWTOP + Math.round((VIEWH - h) / 2);
+  panel(x0, y0, w, h, COL.night2, COL.edge);
+  text(s.opp.city + " HAVE THE BALL", x0 + w / 2, y0 + 7, { color: s.opp.trim });
 
-  // A strip of field with their position on it — the whole drive at a glance.
-  const bx = 14, bw = ARTW - 28, by = y0 + 26;
+  // The whole drive at a glance.
+  const bx = x0 + 12, bw = w - 24, by = y0 + 22;
   rect(bx, by, bw, 8, COL.turfDark);
-  rect(bx, by, bw * (FIELD.EZ / FIELD.L), 8, G.st.my.jersey);
-  rect(bx + bw * (1 - FIELD.EZ / FIELD.L), by, bw * (FIELD.EZ / FIELD.L), 8, G.st.opp.jersey);
-  const px = bx + bw * clamp(s.los / FIELD.L, 0, 1);
-  rect(px - 1, by - 2, 2, 12, COL.flood);
-  text("YOUR GOAL", bx, by + 12, { align: -1, scale: 1, color: COL.dim });
-  text(fieldLabel(s.los, false), bx + bw, by + 12, { align: 1, scale: 1, color: COL.ink });
+  rect(bx, by, bw * (FIELD.EZ / FIELD.L), 8, s.my.jersey);
+  rect(bx + bw * (1 - FIELD.EZ / FIELD.L), by, bw * (FIELD.EZ / FIELD.L), 8, s.opp.jersey);
+  rect(bx + bw * clamp(s.los / FIELD.L, 0, 1) - 1, by - 3, 2, 14, COL.flood);
+  text("YOUR GOAL", bx, by + 13, { align: -1, color: COL.dim, shadow: false });
+  text(fieldLabel(s.los, false), bx + bw, by + 13, { align: 1, color: COL.ink, shadow: false });
 
-  const lines = s.log.slice(-4);
+  const lines = s.log.slice(-3);
   lines.forEach((l, i) => {
-    const last = i === lines.length - 1;
-    text(l, ARTW / 2, y0 + 46 + i * 10, { scale: 1, color: last ? COL.ink : COL.dim });
+    text(l, x0 + w / 2, y0 + 50 + i * 11,
+         { color: i === lines.length - 1 ? COL.ink : COL.dim });
   });
 
-  button("advance", ARTW / 2 - 46, y0 + h - 22, 92, 16,
+  button("advance", x0 + w / 2 - 52, y0 + h - 22, 104, 16,
          d && d.i < d.events.length ? "NEXT PLAY" : "CONTINUE", { primary: true });
 }
 
 /* ---- screens ------------------------------------------------------- */
 function drawTitle() {
   rect(0, 0, ARTW, ARTH, COL.night);
-  for (let i = 0; i < 6; i++) rect(0, 40 + i * 26, ARTW, 12, i % 2 ? COL.night2 : "#111A22");
-  text("PIXEL", ARTW / 2, 30, { scale: 4, color: COL.chalk });
-  text("BOWL", ARTW / 2, 62, { scale: 4, color: COL.flood });
-  text("FOUR DOWNS · ONE THUMB", ARTW / 2, 100, { scale: 1, color: COL.dim });
+  for (let i = 0; i < 8; i++) rect(0, 16 + i * 28, ARTW, 13, i % 2 ? COL.night2 : "#111A22");
 
-  const bw = ARTW - 48;
-  button("start", 24, 130, bw, 26, "PLAY", { primary: true, scale: 2 });
-  button("diff", 24, 164, bw, 20, "DIFFICULTY  " + DIFFS[SETTINGS.diff].name, { scale: 1 });
-  button("qlen", 24, 190, bw, 20, "QUARTER  " + SETTINGS.quarter + " MIN", { scale: 1 });
-  button("sfx", 24, 216, bw, 20, "SOUND  " + (SETTINGS.sound ? "ON" : "OFF"), { scale: 1 });
+  const lx = Math.round(ARTW * 0.28);
+  text("PIXEL", lx, Math.round(ARTH * 0.24), { scale: 5, color: COL.chalk });
+  text("BOWL", lx, Math.round(ARTH * 0.24) + 40, { scale: 5, color: COL.flood });
+  text("FOUR DOWNS · ONE THUMB", lx, Math.round(ARTH * 0.24) + 84, { color: COL.dim });
+
+  const bx = Math.round(ARTW * 0.58), bw = Math.round(ARTW * 0.34);
+  let by = Math.round(ARTH * 0.18);
+  button("start", bx, by, bw, 28, "PLAY", { primary: true, scale: 2 });
+  by += 36;
+  button("diff", bx, by, bw, 20, "DIFFICULTY  " + DIFFS[SETTINGS.diff].name); by += 26;
+  button("qlen", bx, by, bw, 20, "QUARTER  " + SETTINGS.quarter + " MIN"); by += 26;
+  button("sfx", bx, by, bw, 20, "SOUND  " + (SETTINGS.sound ? "ON" : "OFF"));
 
   const rec = RECORD.played
     ? RECORD.won + "-" + RECORD.lost + (RECORD.tied ? "-" + RECORD.tied : "") + "   BEST " + RECORD.best
     : "NO GAMES PLAYED YET";
-  text(rec, ARTW / 2, ARTH - 26, { scale: 1, color: COL.dim });
-  text("DRAG TO AIM", ARTW / 2, ARTH - 16, { scale: 1, color: "#5D707D" });
-  text("RELEASE TO THROW", ARTW / 2, ARTH - 8, { scale: 1, color: "#5D707D" });
+  text(rec, ARTW / 2, ARTH - 14, { color: COL.dim });
 }
 
 function drawTeams() {
   rect(0, 0, ARTW, ARTH, COL.night);
-  text(PICK.forOpponent ? "PICK OPPONENT" : "PICK YOUR TEAM", ARTW / 2, 16, { scale: 2, color: COL.flood });
-  text(PICK.forOpponent ? PICK.mine.city + " HOST" : "THE BAR IS TEAM STRENGTH",
-       ARTW / 2, 34, { scale: 1, color: COL.dim });
+  text(PICK.forOpponent ? "PICK OPPONENT" : "PICK YOUR TEAM", ARTW / 2, 10,
+       { scale: 2, color: COL.flood });
+  text(PICK.forOpponent ? "AT HOME: " + PICK.mine.city : "THE BAR IS TEAM STRENGTH",
+       ARTW / 2, 28, { color: COL.dim });
 
   const list = TEAMS.filter(t => !PICK.forOpponent || t.ab !== PICK.mine.ab);
-  const cols = 2, m = 10, gap = 6;
-  const cw = Math.floor((ARTW - m * 2 - gap) / cols), ch = 34;
+  const cols = 4, m = 14, gap = 8;
+  const cw = Math.floor((ARTW - m * 2 - gap * (cols - 1)) / cols);
+  const rows = Math.ceil(list.length / cols);
+  const ch = Math.min(64, Math.floor((ARTH - 68 - gap * (rows - 1)) / rows));
   list.forEach((t, i) => {
     const x = m + (i % cols) * (cw + gap);
-    const y = 48 + Math.floor(i / cols) * (ch + gap);
+    const y = 42 + Math.floor(i / cols) * (ch + gap);
     HOT.push({ id: "team:" + t.ab, x, y, w: cw, h: ch });
     panel(x, y, cw, ch, t.jersey, COL.edge);
     rect(x, y, cw, 3, t.trim);
-    text(t.ab, x + cw / 2, y + 7, { scale: 2, color: t.trim });
-    text(t.nick.slice(0, 11), x + cw / 2, y + 22, { scale: 1, color: COL.ink });
+    text(t.ab, x + cw / 2, y + 8, { scale: 2, color: t.trim });
+    text(t.nick.slice(0, 12), x + cw / 2, y + 26, { color: COL.ink });
     const bars = clamp(Math.round((t.str + 8) / 16 * 5), 0, 5);
     for (let b = 0; b < 5; b++)
-      rect(x + cw / 2 - 11 + b * 5, y + ch - 6, 3, 2, b < bars ? COL.flood : "#33414C");
+      rect(x + cw / 2 - 13 + b * 6, y + ch - 9, 4, 3, b < bars ? COL.flood : "#33414C");
   });
-  button("back", ARTW / 2 - 30, ARTH - 24, 60, 16, "BACK", { scale: 1 });
+  button("back", ARTW / 2 - 34, ARTH - 20, 68, 16, "BACK");
 }
 
 function drawFinal() {
   const s = G.st;
-  rect(0, VIEWTOP, ARTW, VIEWH, "rgba(8,11,14,.82)");
+  rect(0, VIEWTOP, ARTW, VIEWH, "rgba(8,11,14,.86)");
   const win = s.us > s.them, tie = s.us === s.them;
-  text(tie ? "TIE GAME" : win ? "YOU WIN" : "YOU LOSE", ARTW / 2, VIEWTOP + 16,
+  const lx = Math.round(ARTW * 0.26);
+  text(tie ? "TIE GAME" : win ? "YOU WIN" : "YOU LOSE", lx, VIEWTOP + 16,
        { scale: 3, color: tie ? COL.flood : win ? COL.good : COL.bad });
-  text(s.my.ab + "  " + s.us + "   -   " + s.them + "  " + s.opp.ab, ARTW / 2, VIEWTOP + 42,
+  text(s.my.ab + "  " + s.us + "   -   " + s.them + "  " + s.opp.ab, lx, VIEWTOP + 44,
        { scale: 2, color: COL.ink });
+  text("SEED " + s.seed.toString(16).toUpperCase(), lx, VIEWTOP + 66, { color: "#4E5F6B" });
+
+  button("again", lx - 66, ARTH - 52, 132, 20, "REMATCH", { primary: true });
+  button("menu", lx - 66, ARTH - 28, 132, 18, "MAIN MENU");
 
   const rows = [
-    ["FIRST DOWNS", s.stats.us.first, s.stats.them.first],
-    ["TOTAL YARDS", Math.round(s.stats.us.yards), Math.round(Math.max(0, s.stats.them.plays * 5.2))],
-    ["PASSING", Math.round(s.stats.us.pass), "-"],
-    ["RUSHING", Math.round(s.stats.us.rush), "-"],
-    ["COMP / ATT", s.stats.us.comp + "/" + s.stats.us.att, "-"],
-    ["TURNOVERS", s.stats.us.to, "-"],
+    ["FIRST DOWNS", s.stats.us.first],
+    ["TOTAL YARDS", Math.round(s.stats.us.yards)],
+    ["PASSING", Math.round(s.stats.us.pass)],
+    ["RUSHING", Math.round(s.stats.us.rush)],
+    ["COMP / ATT", s.stats.us.comp + "/" + s.stats.us.att],
+    ["TURNOVERS", s.stats.us.to],
   ];
-  const y0 = VIEWTOP + 68;
-  panel(10, y0, ARTW - 20, rows.length * 10 + 8, COL.night2, COL.edge);
+  const pw = Math.round(ARTW * 0.38), px0 = Math.round(ARTW * 0.56);
+  const ph = rows.length * 12 + 16;
+  panel(px0, VIEWTOP + 12, pw, ph, COL.night2, COL.edge);
+  text("YOUR GAME", px0 + pw / 2, VIEWTOP + 17, { color: COL.flood });
   rows.forEach((r, i) => {
-    const y = y0 + 5 + i * 10;
-    text(r[0], ARTW / 2, y, { scale: 1, color: COL.dim });
-    text(String(r[1]), 16, y, { align: -1, scale: 1, color: s.my.trim });
-    text(String(r[2]), ARTW - 16, y, { align: 1, scale: 1, color: s.opp.trim });
+    const y = VIEWTOP + 30 + i * 12;
+    text(r[0], px0 + 10, y, { align: -1, color: COL.dim });
+    text(String(r[1]), px0 + pw - 10, y, { align: 1, color: s.my.trim });
   });
-
-  const by = y0 + rows.length * 10 + 18;
-  button("again", 20, by, ARTW - 40, 20, "REMATCH", { primary: true });
-  button("menu", 20, by + 26, ARTW - 40, 18, "MAIN MENU", { scale: 1 });
-  text("SEED " + s.seed.toString(16).toUpperCase(), ARTW / 2, by + 50, { scale: 1, color: "#4E5F6B" });
 }
 
 /* ===================================================================
@@ -2452,7 +2721,7 @@ const Input = {
   down: false, x: 0, y: 0, sx: 0, sy: 0,
   holdId: null, aim: null, aimFrom: null,
   steerX: 0, steerY: 0, sprint: false,
-  tap: null, throwTo: null, tuck: false, snap: false,
+  tap: null, throwTo: null, tuck: false, snap: false, swiped: false,
 };
 
 function toArt(e) {
@@ -2468,6 +2737,7 @@ function onDown(e) {
   Sound.init();
   const p = toArt(e);
   Input.down = true;
+  Input.swiped = false;
   Input.x = Input.sx = p.x;
   Input.y = Input.sy = p.y;
   const hot = hitTest(p.x, p.y);
@@ -2491,6 +2761,20 @@ function onMove(e) {
   const p = toArt(e);
   Input.x = p.x; Input.y = p.y;
 
+  // A horizontal drag across the play row pages the book instead of
+  // pressing a card — the standard mobile compromise between the two.
+  if (SCREEN === "game" && G.st.phase === "playcall" && !Input.swiped) {
+    const dx = p.x - Input.sx;
+    if (Math.abs(dx) > 26 && Math.abs(dx) > Math.abs(p.y - Input.sy)) {
+      const pages = playPages();
+      playPage = (playPage + (dx < 0 ? 1 : pages - 1)) % pages;
+      Input.swiped = true;
+      Input.holdId = null;
+      Sound.blip();
+      return;
+    }
+  }
+
   if (Input.holdId) {
     // Sliding off a button releases it, the way a hardware button would.
     const hot = hitTest(p.x, p.y);
@@ -2501,26 +2785,27 @@ function onMove(e) {
   if (SCREEN !== "game" || G.st.phase !== "live" || !sim || sim.over) return;
 
   if (Input.aim && sim.qbHasIt() && !sim.tucked) {
-    const dx = (p.x - Input.sx) / PPY * CFG.aimGain;
-    const dy = -(p.y - Input.sy) / PPY * CFG.aimGain;
+    // Screen right is downfield; screen up is across the field.
+    const dAlong = (p.x - Input.sx) / PPY * CFG.aimGain;
+    const dAcross = -(p.y - Input.sy) / PPY * CFG.aimGain;
     const qb = sim.P[0];
-    let ax = clamp(Input.aimFrom.x + dx, 0.8, FIELD.W - 0.8);
-    let ay = clamp(Input.aimFrom.y + dy, qb.y - 4, qb.y + CFG.maxThrow);
-    // A target you cannot see is not a target: keep the cursor inside the
-    // visible field, between the scoreboard and the buttons.
-    const topFy = FIELD.L - (camY + 16) / PPY;
-    const botFy = FIELD.L - (camY + ARTH - VIEWTOP - 44) / PPY;
-    ay = clamp(ay, Math.max(0.8, botFy), Math.min(FIELD.L - 0.8, topFy));
+    let ay = clamp(Input.aimFrom.y + dAlong, qb.y - 4, qb.y + CFG.maxThrow);
+    // Keep the whole crosshair on the field, arms included.
+    let ax = clamp(Input.aimFrom.x + dAcross, 2.0, FIELD.W - 2.0);
+    // A target you cannot see is not a target: keep the cursor on screen.
+    const leftFy = (camX + 14) / PPY;
+    const rightFy = (camX + ARTW - 14) / PPY;
+    ay = clamp(ay, Math.max(0.8, leftFy), Math.min(FIELD.L - 0.8, rightFy));
     Input.aim = { x: ax, y: ay };
     return;
   }
-  // Floating stick for the ball carrier.
+  // Floating stick for the ball carrier, in the same rotated frame.
   const ddx = p.x - Input.sx, ddy = p.y - Input.sy;
   const len = Math.hypot(ddx, ddy);
   if (len < 4) { Input.steerX = 0; Input.steerY = 0; return; }
-  Input.steerX = ddx / len;
-  Input.steerY = -ddy / len;
-  Input.sprint = len > 22;
+  Input.steerY = ddx / len;      // screen right → downfield
+  Input.steerX = -ddy / len;     // screen up    → across
+  Input.sprint = len > 26;
 }
 
 function onUp(e) {
@@ -2528,7 +2813,7 @@ function onUp(e) {
   e.preventDefault();
   const p = toArt(e);
   const hot = hitTest(p.x, p.y);
-  if (Input.holdId && hot && hot.id === Input.holdId) Input.tap = Input.holdId;
+  if (Input.holdId && hot && hot.id === Input.holdId && !Input.swiped) Input.tap = Input.holdId;
 
   const sim = G.play;
   if (!Input.holdId && SCREEN === "game") {
@@ -2616,7 +2901,7 @@ function update(dt) {
     const inp = {
       snap: false,
       steerX: Input.steerX, steerY: Input.steerY, sprint: Input.sprint,
-      throwTo: Input.throwTo, tuck: Input.tuck,
+      throwTo: Input.throwTo, tuck: Input.tuck, aiming: !!Input.aim,
     };
     Input.throwTo = null; Input.tuck = false;
 
@@ -2625,7 +2910,8 @@ function update(dt) {
     let acc = dt, steps = 0;
     const H = 1 / 60;
     while (acc >= H && steps < 6 && !G.play.over) {
-      G.play.step(H, steps === 0 ? inp : { steerX: inp.steerX, steerY: inp.steerY, sprint: inp.sprint });
+      G.play.step(H, steps === 0 ? inp
+        : { steerX: inp.steerX, steerY: inp.steerY, sprint: inp.sprint, aiming: inp.aiming });
       acc -= H; steps++;
     }
     if (G.play.over) {
@@ -2654,9 +2940,14 @@ function update(dt) {
 
   if (s.phase === "kick") {
     const k = s.kick;
+    // Creep the rush in, purely for the look of it — you cannot be blocked.
+    k.t += dt;
+    for (const pl of k.players)
+      if (pl.role === "rush") pl.y = pl.y0 - Math.min(1.4, k.t * 1.2);
+
     if (k.flight) {
       k.flight.t += dt;
-      if (k.flight.t > 1.7) {
+      if (k.flight.t > k.flight.dur + 0.8) {
         const good = k.flight.good;
         const wasXP = k.kind === "xp";
         s.kick = null;
@@ -2682,11 +2973,13 @@ function update(dt) {
   updateCamera(dt, s.phase === "playcall" || s.phase === "defense");
 }
 
+let lastDt = 1 / 60;
 function draw() {
   HOT = [];
   ctx.fillStyle = COL.night;
   ctx.fillRect(0, 0, cv.width, cv.height);
 
+  if (NEEDS_ROTATE) { drawRotatePrompt(); return; }
   if (SCREEN === "title") { drawTitle(); return; }
   if (SCREEN === "teams") { drawTeams(); return; }
   if (!G.st) return;
@@ -2694,7 +2987,7 @@ function draw() {
   buildField();
   drawField();
   drawLines();
-  drawPlayers();
+  drawPlayers(lastDt);
   drawAim();
   drawHUD();
 
@@ -2714,6 +3007,7 @@ let lastT = 0;
 function frame(ts) {
   const dt = lastT ? Math.min(0.1, (ts - lastT) / 1000) : 1 / 60;
   lastT = ts;
+  lastDt = dt;
   update(dt);
   draw();
   requestAnimationFrame(frame);

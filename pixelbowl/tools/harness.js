@@ -24,7 +24,7 @@ function fakeCanvas(w = 390, h = 844) {
   return c;
 }
 
-function loadGame({ width = 390, height = 844, file = null } = {}) {
+function loadGame({ width = 844, height = 390, file = null } = {}) {
   const html = fs.readFileSync(file || path.join(__dirname, "..", "index.html"), "utf8");
   const js = html.match(/<script>\n([\s\S]*)\n<\/script>/)[1];
 
