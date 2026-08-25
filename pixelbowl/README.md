@@ -73,12 +73,20 @@ browser drives it, so the tests exercise shipping code rather than a copy.
 ```bash
 node tools/test.js        # 59 checks: termination, determinism, rules, balance
 node tools/balance.js     # plays whole games, reports the numbers you'd feel
+npm i && node tools/shots.js   # renders it in Chromium and screenshots every screen
 ```
 
 `tools/test.js` runs 1,440 plays across every play/front/field-position
 combination checking nothing hangs, goes NaN or ends off the field; asserts the
 simulation is reproducible; then plays complete games through the real phase
 machine asserting the state never goes illegal between snaps.
+
+`tools/shots.js` is the one that matters for anything visual: the Node harness
+stubs every drawing call to a no-op, so only a real browser proves the game
+looks like anything. It drives a drive at an iPhone viewport and saves a shot of
+each screen. It found the aim cursor dragging off the top of the display, an
+unreadable kick screen drawn straight onto the turf, and painted yard numbers
+at three times life size — none of which the logic tests could see.
 
 `tools/make_artifact.py` strips the standalone document down to the body-only
 form an Artifact accepts, so there is one source of truth.

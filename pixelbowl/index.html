@@ -240,7 +240,7 @@ const CFG = {
 
   // Feel.
   deadBall: 1.5,
-  aimGain: 1.7,          // finger travel → cursor travel
+  aimGain: 1.25,         // finger travel → cursor travel
   reachAhead: 13,        // yards downfield the cursor starts at
 };
 
@@ -2031,7 +2031,7 @@ function buildField() {
     const toGoal = FIELD.oppGoal - y;
     const n = String(toGoal > 50 ? 100 - toGoal : toGoal);
     const c = textCanvas(n, COL.chalkDim);
-    const s = Math.max(1, Math.round(PPY * 0.55));
+    const s = Math.max(1, Math.round(PPY * 0.35));
     g.drawImage(c, 0, 0, c.width, c.height,
                 Math.round(2.6 * PPY) * UNIT, Math.round(Y(y) - c.height * s / 2) * UNIT,
                 c.width * s * UNIT, c.height * s * UNIT);
@@ -2135,15 +2135,20 @@ function drawAim() {
   const qb = sim.P[0];
   const ax = sx(aim.x), ay = sy(aim.y);
   // Dotted line from the arm to the spot, then a crosshair on the spot.
-  const steps = 12;
-  for (let i = 2; i <= steps; i++) {
-    const t = i / steps;
-    rect(lerp(sx(qb.x), ax, t) - 0.5, lerp(sy(qb.y), ay, t) - 0.5, 1, 1,
-         i % 2 ? COL.flood : "#7A6320");
+  const span = Math.hypot(ax - sx(qb.x), ay - sy(qb.y));
+  const steps = Math.max(6, Math.min(26, Math.round(span / 9)));
+  for (let i = 1; i <= steps; i++) {
+    const t = i / (steps + 1);
+    const px = lerp(sx(qb.x), ax, t), py = lerp(sy(qb.y), ay, t);
+    rect(px - 1.5, py - 1.5, 3, 3, COL.ink);        // dark backing, for turf
+    rect(px - 1, py - 1, 2, 2, COL.flood);
   }
-  rect(ax - 5, ay, 4, 1, COL.flood); rect(ax + 2, ay, 4, 1, COL.flood);
-  rect(ax, ay - 5, 1, 4, COL.flood); rect(ax, ay + 2, 1, 4, COL.flood);
-  rect(ax - 1, ay - 1, 3, 3, COL.flood);
+  // Crosshair, drawn dark-then-light so it reads on any part of the field.
+  const arms = [[-8, -1, 6, 2], [3, -1, 6, 2], [-1, -8, 2, 6], [-1, 3, 2, 6]];
+  for (const [ox, oy, w, h] of arms) rect(ax + ox - 1, ay + oy - 1, w + 2, h + 2, COL.ink);
+  for (const [ox, oy, w, h] of arms) rect(ax + ox, ay + oy, w, h, COL.flood);
+  rect(ax - 3, ay - 3, 6, 6, COL.ink);
+  rect(ax - 2, ay - 2, 4, 4, COL.flood);
 }
 
 /* ---- HUD --------------------------------------------------------- */
@@ -2163,7 +2168,7 @@ function drawHUD() {
   const m = Math.max(0, Math.ceil(s.clock));
   const clock = Math.floor(m / 60) + ":" + String(m % 60).padStart(2, "0");
   text(clock, ARTW / 2, 2, { scale: 1, color: COL.ink });
-  const qLabel = ["", "1ST", "2ND", "3RD", "4TH"][clamp(s.q, 0, 4)];
+  const qLabel = "Q" + clamp(s.q, 1, 4);
   const line = s.poss === "us" ? qLabel + "  " + downText() + "  " + fieldLabel(s.los, true)
                                : qLabel + "  " + s.opp.ab + " BALL";
   text(line, ARTW / 2, 11, { scale: 1, color: COL.dim });
@@ -2236,8 +2241,8 @@ function drawLiveControls() {
   const sim = G.play;
   if (!sim || sim.over) return;
   if (sim.qbHasIt() && !sim.tucked) {
-    button("tuck", ARTW - 44, ARTH - 26, 38, 20, "RUN", { scale: 1 });
-    if (!Input.aim) text("DRAG TO AIM", ARTW / 2 - 20, ARTH - 20, { scale: 1, color: COL.dim });
+    button("tuck", ARTW - 46, ARTH - 44, 40, 22, "RUN", { scale: 1 });
+    if (!Input.aim) text("DRAG TO AIM", ARTW / 2 - 14, ARTH - 38, { scale: 1, color: COL.dim });
   }
 }
 
@@ -2254,55 +2259,79 @@ function drawTry() {
 /* ---- kicking ------------------------------------------------------ */
 function drawKick() {
   const s = G.st, k = s.kick;
-  const cx = ARTW / 2, base = VIEWTOP + VIEWH * 0.72;
+
+  // The kick used to draw straight onto the turf and was unreadable over an
+  // end zone. It gets its own panel.
+  rect(0, VIEWTOP, ARTW, VIEWH, "rgba(8,11,14,.72)");
+  const pad = 8;
+  const h = Math.min(VIEWH - 40, 232);
+  const y0 = VIEWTOP + Math.round((VIEWH - h) / 2);
+  panel(pad, y0, ARTW - pad * 2, h, COL.night2, COL.edge);
+
+  const cx = ARTW / 2;
+  const barY = y0 + 80;                 // the crossbar
+  const teeY = y0 + h - 48;             // where the ball sits
+  const half = 26;                      // half the width between the posts
+
+  // A few chalk lines between the tee and the posts, so the gap reads as
+  // distance rather than as empty panel.
+  for (let i = 1; i <= 3; i++) {
+    const ly = lerp(teeY, barY + 10, i / 4);
+    rect(cx - 30 + i * 4, ly, 60 - i * 8, 1, "#20303C");
+  }
+
+  text(k.kind === "xp" ? "EXTRA POINT" : "FIELD GOAL", cx, y0 + 8,
+       { scale: 1, color: COL.dim });
+  if (k.kind !== "xp")
+    text(Math.round(k.dist) + " YARDS", cx, y0 + 20, { scale: 2, color: COL.flood });
+
+  const w = k.wind;
+  const arrow = w > 0.15 ? "▲" : w < -0.15 ? "▼" : "·";
+  text("WIND " + arrow + " " + Math.abs(w).toFixed(1), cx, y0 + 42,
+       { scale: 1, color: Math.abs(w) > 1.2 ? COL.bad : COL.dim });
+
+  // Uprights.
+  rect(cx - half, barY, half * 2, 2, COL.chalk);
+  rect(cx - half, barY - 18, 2, 20, COL.flood);
+  rect(cx + half - 2, barY - 18, 2, 20, COL.flood);
+
+  const ball = ballSprite(UNIT);
+  const drawBall = (bx, by) =>
+    ctx.drawImage(ball.canvas, Math.round(bx - ball.w / 2) * UNIT, Math.round(by) * UNIT,
+                  ball.w * UNIT, ball.h * UNIT);
 
   if (!k.flight) {
-    const w = k.wind;
-    const arrow = w > 0.15 ? "▲" : w < -0.15 ? "▼" : "·";
-    text("WIND " + arrow + " " + Math.abs(w).toFixed(1), ARTW / 2, VIEWTOP + 8,
-         { scale: 1, color: Math.abs(w) > 1.2 ? COL.bad : COL.dim });
-    text((k.kind === "xp" ? "EXTRA POINT" : Math.round(k.dist) + " YARDS"), ARTW / 2, VIEWTOP + 18,
-         { scale: 2, color: COL.flood });
-
-    // The uprights, drawn where the ball has to go.
-    const gy = VIEWTOP + 26;
-    rect(cx - 22, gy + 10, 44, 1, COL.chalk);
-    rect(cx - 22, gy, 1, 12, COL.flood);
-    rect(cx + 21, gy, 1, 12, COL.flood);
-
     if (Input.down) {
-      const dx = (Input.x - Input.sx), dy = Math.max(0, Input.y - Input.sy);
-      const power = clamp(dy / 60, 0, 1);
-      const aim = clamp(-dx / 8, -8, 8);
-      k.aimX = aim; k.power = power;
+      const dx = Input.x - Input.sx, dy = Math.max(0, Input.y - Input.sy);
+      k.power = clamp(dy / 70, 0, 1);
+      k.aimX = clamp(-dx / 7, -9, 9);
       // Live preview of the flight, so the swipe teaches itself.
-      for (let i = 1; i <= 10; i++) {
-        const t = i / 10;
-        const px = lerp(cx, cx + aim * 2.6, t);
-        const py = lerp(base, gy + 6, t) - Math.sin(t * Math.PI) * 12 * power;
-        rect(px - 0.5, py - 0.5, 1, 1, i % 2 ? COL.flood : "#7A6320");
+      for (let i = 1; i <= 14; i++) {
+        const t = i / 14;
+        const px = lerp(cx, cx + k.aimX * 3, t);
+        const py = lerp(teeY, barY + 4, t) - Math.sin(t * Math.PI) * 16 * k.power;
+        rect(px - 1.5, py - 1.5, 3, 3, COL.ink);
+        rect(px - 1, py - 1, 2, 2, COL.flood);
       }
-      rect(cx - 30, base + 12, 60, 4, COL.panel);
-      rect(cx - 30, base + 12, 60 * power, 4, power > 0.85 ? COL.bad : COL.flood);
-      text("RELEASE TO KICK", ARTW / 2, base + 22, { scale: 1, color: COL.dim });
+      const bw = ARTW - pad * 2 - 28;
+      rect(cx - bw / 2, y0 + h - 28, bw, 6, COL.ink);
+      rect(cx - bw / 2, y0 + h - 28, bw * k.power, 6,
+           k.power > 0.9 ? COL.bad : COL.flood);
+      text("RELEASE", cx, y0 + h - 16, { scale: 1, color: COL.ink });
     } else {
-      text("DRAG DOWN AND RELEASE", ARTW / 2, base + 16, { scale: 1, color: COL.dim });
-      text("AIM WITH THE SWIPE", ARTW / 2, base + 26, { scale: 1, color: COL.dim });
+      text("DRAG DOWN, THEN RELEASE", cx, y0 + h - 28, { scale: 1, color: COL.ink });
+      text("SIDEWAYS TO AIM", cx, y0 + h - 16, { scale: 1, color: COL.dim });
     }
-    const b = ballSprite(UNIT);
-    ctx.drawImage(b.canvas, Math.round(cx - b.w / 2) * UNIT, Math.round(base) * UNIT, b.w * UNIT, b.h * UNIT);
+    drawBall(cx, teeY);
   } else {
-    const f = k.flight, gy = VIEWTOP + 26;
+    const f = k.flight;
     const t = clamp(f.t / 0.9, 0, 1);
-    const px = lerp(cx, cx + f.landX * 3.4, t);
-    const py = lerp(base, gy + 6, t) - Math.sin(t * Math.PI) * 14;
-    rect(cx - 22, gy + 10, 44, 1, COL.chalk);
-    rect(cx - 22, gy, 1, 12, COL.flood);
-    rect(cx + 21, gy, 1, 12, COL.flood);
-    const b = ballSprite(UNIT);
-    ctx.drawImage(b.canvas, Math.round(px - b.w / 2) * UNIT, Math.round(py) * UNIT, b.w * UNIT, b.h * UNIT);
-    if (t >= 1) text(f.good ? "GOOD" : (f.hasLeg ? "WIDE" : "SHORT"), ARTW / 2, base + 10,
-                     { scale: 2, color: f.good ? COL.good : COL.bad });
+    const px = lerp(cx, cx + f.landX * 3.6, t);
+    const py = lerp(teeY, barY + 2, t) - Math.sin(t * Math.PI) * 18;
+    drawBall(px, py);
+    if (t >= 1)
+      text(f.good ? "GOOD" : (f.hasLeg ? "WIDE" : "SHORT"), cx, y0 + h - 24,
+           { scale: 2, color: f.good ? COL.good : COL.bad });
   }
 }
 
@@ -2339,9 +2368,9 @@ function drawDefense() {
 function drawTitle() {
   rect(0, 0, ARTW, ARTH, COL.night);
   for (let i = 0; i < 6; i++) rect(0, 40 + i * 26, ARTW, 12, i % 2 ? COL.night2 : "#111A22");
-  text("PIXEL", ARTW / 2, 34, { scale: 4, color: COL.chalk });
-  text("BOWL", ARTW / 2, 66, { scale: 4, color: COL.flood });
-  text("FOUR DOWNS · ONE THUMB", ARTW / 2, 96, { scale: 1, color: COL.dim });
+  text("PIXEL", ARTW / 2, 30, { scale: 4, color: COL.chalk });
+  text("BOWL", ARTW / 2, 62, { scale: 4, color: COL.flood });
+  text("FOUR DOWNS · ONE THUMB", ARTW / 2, 100, { scale: 1, color: COL.dim });
 
   const bw = ARTW - 48;
   button("start", 24, 130, bw, 26, "PLAY", { primary: true, scale: 2 });
@@ -2353,7 +2382,8 @@ function drawTitle() {
     ? RECORD.won + "-" + RECORD.lost + (RECORD.tied ? "-" + RECORD.tied : "") + "   BEST " + RECORD.best
     : "NO GAMES PLAYED YET";
   text(rec, ARTW / 2, ARTH - 26, { scale: 1, color: COL.dim });
-  text("DRAG TO AIM · RELEASE TO THROW", ARTW / 2, ARTH - 14, { scale: 1, color: "#5D707D" });
+  text("DRAG TO AIM", ARTW / 2, ARTH - 16, { scale: 1, color: "#5D707D" });
+  text("RELEASE TO THROW", ARTW / 2, ARTH - 8, { scale: 1, color: "#5D707D" });
 }
 
 function drawTeams() {
@@ -2476,7 +2506,11 @@ function onMove(e) {
     const qb = sim.P[0];
     let ax = clamp(Input.aimFrom.x + dx, 0.8, FIELD.W - 0.8);
     let ay = clamp(Input.aimFrom.y + dy, qb.y - 4, qb.y + CFG.maxThrow);
-    ay = clamp(ay, 0.8, FIELD.L - 0.8);
+    // A target you cannot see is not a target: keep the cursor inside the
+    // visible field, between the scoreboard and the buttons.
+    const topFy = FIELD.L - (camY + 16) / PPY;
+    const botFy = FIELD.L - (camY + ARTH - VIEWTOP - 44) / PPY;
+    ay = clamp(ay, Math.max(0.8, botFy), Math.min(FIELD.L - 0.8, topFy));
     Input.aim = { x: ax, y: ay };
     return;
   }
