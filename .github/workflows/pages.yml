@@ -5,22 +5,20 @@
 # full-screen app with its own icon that opens with no signal. No developer
 # certificate, no seven-day expiry, no Mac.
 #
-# One thing has to be done by hand, once, because a workflow token is not a
-# repository admin and never can be: enabling Pages. Creating a Pages site
-# needs admin rights, so `enablement: true` fails with "Resource not
-# accessible by integration" no matter what the permissions block says.
+# NOT IN USE, and left here on purpose.
 #
-#   https://github.com/ChanBlake/claude/settings/pages
-#   Build and deployment -> Source -> "GitHub Actions"
+# Pages is served straight from this branch instead ("Deploy from a branch",
+# folder /root), which needs no workflow, no Actions minutes, and no
+# github-pages environment that might restrict deploys to a default branch
+# this repository does not have. A push republishes the site by itself.
 #
-# After that this runs on every push to the branch and needs nothing else.
+# This exists for the day the site needs a build step. It cannot enable Pages
+# for itself — creating a Pages site needs repository admin, which a workflow
+# token is not, whatever the permissions block below says — so switching to it
+# means setting Source to "GitHub Actions" by hand first.
 name: Pages
 
 on:
-  push:
-    branches:
-      - main
-      - "claude/pixel-football-ios-game-kmiufs"
   workflow_dispatch:
 
 permissions:
