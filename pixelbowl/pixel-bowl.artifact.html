@@ -434,6 +434,30 @@ const ART = {
     "..kjjjjjjjk..", "...kjjjjjk...", "...kppppk....", "...kppppk....",
     "..kp...pk....", "..kc...ck....", "..kk...kk....",
   ],
+  // Arm cocked, ball behind the ear. Held for the length of the windup, so the
+  // throw has a wind-up you can see rather than the ball simply appearing in
+  // the air a frame later.
+  throwIt: [
+    ".....kkkk....", "....khhhhkk..", "....khhhhhfk.", "bb..khhhhhfk.",
+    "bbbs.ksskk...", ".sskkjjjjk...", "..kjjjjjjjk..", "..kjttjjjjk..",
+    "..kjjjjjjjk..", "...kjjjjjk...", "...kppppk....", "...kppppk....",
+    "..kp...pk....", "..kc...ck....", "..kk...kk....",
+  ],
+  // Follow-through: arm out, ball gone, weight onto the front foot.
+  release: [
+    ".....kkkk....", "....khhhhkk..", "....khhhhhfk.", "....khhhhhfk.",
+    ".....ksskk...", "...kkjjjjkss.", "..kjjjjjjjk.b", "..kjttjjjjk..",
+    "..kjjjjjjjk..", "...kjjjjjk...", "...kppppk....", "...kppppk....",
+    "..kp..pk.....", "..kc..ck.....", "..kk..kk.....",
+  ],
+  // A man about to put someone on the floor, rather than a man standing next
+  // to someone who then falls over.
+  tackle: [
+    ".............", ".....kkkk....", "....khhhhkk..", "....khhhhhfk.",
+    ".....ksskkss.", "...kkjjjjkss.", "..kjjjjjjjk..", "..kjttjjjjk..",
+    "..kjjjjjjjk..", "..kjjjjjk....", "..kppppk.....", ".kppppk......",
+    ".kp..pk......", "kc...ck......", "kk...kk......",
+  ],
   block: [
     ".....kkkk......", "....khhhhkk....", "....khhhhhfk...", "....khhhhhfk...",
     ".....ksskk.....", "...kkjjjjk.....", "..kjjjjjjjkkkk.", "..kjttjjjjjssk.",
@@ -3025,11 +3049,13 @@ const scrY = fx => VIEWTOP + (FIELD.W - fx) * PPY - camY;
    up turf, a caught ball is held for a beat, and a thrown ball leaves a
    trail so you can read where it is going.
    ------------------------------------------------------------------ */
-const FX = { puffs: [], trail: [], catchPose: null, prevBall: "dead", prevCaught: false };
+const FX = { puffs: [], trail: [], catchPose: null, throwPose: 0,
+             prevBall: "dead", prevCaught: false, prevThrew: false };
 
 function fxReset() {
   FX.puffs.length = 0; FX.trail.length = 0;
-  FX.catchPose = null; FX.prevBall = "dead"; FX.prevCaught = false;
+  FX.catchPose = null; FX.throwPose = 0;
+  FX.prevBall = "dead"; FX.prevCaught = false; FX.prevThrew = false;
 }
 
 function fxUpdate(dt, sim) {
@@ -3044,7 +3070,12 @@ function fxUpdate(dt, sim) {
     FX.catchPose.t -= dt;
     if (FX.catchPose.t <= 0) FX.catchPose = null;
   }
+  FX.throwPose = Math.max(0, FX.throwPose - dt);
   if (!sim) { FX.trail.length = 0; FX.prevBall = "dead"; return; }
+
+  // The follow-through starts on the frame the ball leaves his hand.
+  if (sim.threw && !FX.prevThrew) FX.throwPose = 0.22;
+  FX.prevThrew = sim.threw;
 
   const b = sim.ball;
   if (b.state === "air") {
@@ -3109,6 +3140,10 @@ function fxDrawPuffs() {
   ctx.globalAlpha = 1;
 }
 
+// The simulation's own `attacking` is closed over inside `makePlay`; the
+// renderer has to work it out from the outside, and it flips on a turnover.
+const attackingWith = (p, sim) => (p.side === "off") !== sim.turnover;
+
 /* ---- the play ---------------------------------------------------- */
 function drawField() {
   const shake = G.play ? G.play.shake : 0;
@@ -3147,8 +3182,19 @@ function drawPlayers(dt) {
     p._stride = (p._stride || 0) + speed * dt;
     let frame;
     const posing = FX.catchPose && FX.catchPose.id === p.id;
+    // A quarterback mid-windup, and the man he is about to become a moment
+    // after the ball goes.
+    const winding = p.idx === 0 && p.side === "off" && sim.windup >= 0;
+    const following = p.idx === 0 && p.side === "off" && FX.throwPose > 0;
+    // Anyone close enough to the ball carrier to be reaching for him.
+    const carrier = sim.P.find(q => q.hasBall && q.mot !== "down");
+    const lunging = carrier && p !== carrier && !attackingWith(p, sim) &&
+                    p.mot === "run" && dist(p.x, p.y, carrier.x, carrier.y) < CFG.tackleR * 2.2;
     if (p.mot === "down") frame = "down";
+    else if (winding) frame = "throwIt";
+    else if (following) frame = "release";
     else if (posing) frame = "catch";
+    else if (lunging) frame = "tackle";
     else if (p.mot === "engaged") frame = "block";
     else if (speed < 0.6) frame = "stand";
     else frame = RUN_CYCLE[Math.floor(p._stride / 0.8) % RUN_CYCLE.length];
@@ -3179,17 +3225,23 @@ function drawPlayers(dt) {
       ctx.fillStyle = COL.flood;
       ctx.fillRect(D(cxA - 5), D(cyA + 1), D(10), UNIT);
     }
-    if (p.hasBall && p.mot !== "down") {
+    if (p.hasBall && p.mot !== "down" && frame !== "throwIt" && frame !== "release") {
       ctx.drawImage(ball.canvas, D(cxA + (faceLeft ? -6 : 2)), D(cyA - 9));
     }
   }
 
-  // Markers over the men you can still throw to.
+  // Markers over the men you can still throw to, coloured by how much room he
+  // has. Green is a man with a step on his cover; red is a man who is covered.
+  // A flat marker over everyone told you where they were and nothing else.
   if (sim.qbHasIt() && !sim.tucked) {
     for (const r of sim.targets()) {
       const mx = scrX(r.y), my = scrY(r.x) - 20;
-      rect(mx - 1.5, my, 3, 3, COL.ink);
-      rect(mx - 1, my + 0.5, 2, 2, G.st.my.trim);
+      const room = nearestDefender(sim, r);
+      const col = room > 3.6 ? COL.good : room > 2.1 ? COL.flood : COL.bad;
+      rect(mx - 2, my - 1, 4, 5, COL.ink);
+      rect(mx - 1, my, 2, 3, col);
+      // A tail so the marker points at the man rather than floating over him.
+      rect(mx - 1, my + 4, 2, 3, COL.ink);
     }
   }
 
@@ -3212,19 +3264,63 @@ function drawAim() {
   const ax = scrX(aim.y), ay = scrY(aim.x);
   const qx = scrX(qb.y), qy = scrY(qb.x);
 
+  // The preview is the flight, not a ruler. Same arc the ball will actually
+  // travel — apex, hang time and all — so what you line up is what you get.
+  const yards = dist(qb.x, qb.y, aim.x, aim.y);
+  const apex = Math.min(yards * CFG.passArc, CFG.passArcMax);
+  const dur = clamp(yards / CFG.passSpeed, 0.22, 2.4);
+  const lift = t => apex * 4 * t * (1 - t) * PPY * 0.9;
+
+  // Under pressure the ball goes where it likes, and the reticle should say so
+  // before you release rather than after.
+  const heat = 1 - clamp(nearestDefender(sim, qb) / CFG.pressureR, 0, 1);
+  const aimCol = heat > 0.35 ? COL.bad : COL.flood;
+
   const span = Math.hypot(ax - qx, ay - qy);
-  const steps = Math.max(6, Math.min(28, Math.round(span / 10)));
+  const steps = Math.max(8, Math.min(30, Math.round(span / 9)));
   for (let i = 1; i <= steps; i++) {
     const t = i / (steps + 1);
-    const px = lerp(qx, ax, t), py = lerp(qy, ay, t);
-    rect(px - 1.5, py - 1.5, 3, 3, COL.ink);
-    rect(px - 1, py - 1, 2, 2, COL.flood);
+    const px = lerp(qx, ax, t), py = lerp(qy, ay, t) - lift(t);
+    const size = 2 + Math.round(t * 1.6);
+    rect(px - size / 2 - 1, py - size / 2 - 1, size + 2, size + 2, COL.ink);
+    rect(px - size / 2, py - size / 2, size, size, aimCol);
   }
+
+  // Where the man nearest the ball will be when it comes down. Leading a
+  // receiver is the whole skill of this control scheme and nothing in the game
+  // ever showed you what it looked like.
+  let lead = null, bd = Infinity;
+  for (const r of sim.targets()) {
+    const d = dist(r.x, r.y, aim.x, aim.y);
+    if (d < bd) { bd = d; lead = r; }
+  }
+  if (lead) {
+    const gx = scrX(lead.y + lead.vy * dur), gy = scrY(lead.x + lead.vx * dur);
+    const off = Math.hypot(gx - ax, gy - ay);
+    const good = off < 9 ? COL.good : off < 20 ? COL.flood : COL.dim;
+    // A hollow ring, so it reads as a prediction rather than a target.
+    for (const [dx, dy] of [[-3, 0], [3, 0], [0, -3], [0, 3], [-2, -2], [2, -2], [-2, 2], [2, 2]])
+      rect(gx + dx - 1, gy + dy - 1, 2, 2, good);
+  }
+
   const arms = [[-9, -1, 7, 2], [3, -1, 7, 2], [-1, -9, 2, 7], [-1, 3, 2, 7]];
-  for (const [ox, oy, w, h] of arms) rect(ax + ox - 1, ay + oy - 1, w + 2, h + 2, COL.ink);
-  for (const [ox, oy, w, h] of arms) rect(ax + ox, ay + oy, w, h, COL.flood);
-  rect(ax - 3, ay - 3, 6, 6, COL.ink);
-  rect(ax - 2, ay - 2, 4, 4, COL.flood);
+  const jx = heat > 0.35 ? Math.round((Math.random() - 0.5) * heat * 4) : 0;
+  const jy = heat > 0.35 ? Math.round((Math.random() - 0.5) * heat * 4) : 0;
+  for (const [ox, oy, w, h] of arms) rect(ax + jx + ox - 1, ay + jy + oy - 1, w + 2, h + 2, COL.ink);
+  for (const [ox, oy, w, h] of arms) rect(ax + jx + ox, ay + jy + oy, w, h, aimCol);
+  rect(ax + jx - 3, ay + jy - 3, 6, 6, COL.ink);
+  rect(ax + jx - 2, ay + jy - 2, 4, 4, aimCol);
+}
+
+// How much room the quarterback has, in yards. The simulation has its own
+// `nearestFoe`, but it is closed over inside the play.
+function nearestDefender(sim, p) {
+  let best = Infinity;
+  for (const q of sim.P) {
+    if (q.side === p.side || q.mot === "down") continue;
+    best = Math.min(best, dist(q.x, q.y, p.x, p.y));
+  }
+  return best;
 }
 
 /* ---- HUD --------------------------------------------------------- */

@@ -120,7 +120,7 @@ The game's own source is loaded under a DOM stub and driven exactly as the
 browser drives it, so the tests exercise shipping code rather than a copy.
 
 ```bash
-node tools/test.js        # 101 checks: termination, determinism, rules, balance, a career
+node tools/test.js        # 105 checks: termination, determinism, rules, balance, a career
 node tools/skill.js       # the same games played by four different standards of thumb
 node tools/cpu.js         # points per drive for the opponent's simulated possession
 YEARS=12 node tools/career.js   # plays a twelve-season career through the real screens
@@ -331,6 +331,36 @@ right-to-left, because you attack leftward. So the moment they took possession
 the game showed you a field pointing the opposite way to the one you had been
 playing on. It now matches, with both goals labelled and a chevron showing
 which way they are coming.
+
+### Throwing, and what it looks like
+
+The ball is thrown at a **point**, not at a man, and leading a receiver is the
+whole skill of a one-thumb control scheme. For a long time nothing in the game
+taught it:
+
+- **The preview is the flight.** The aim line used to be a straight row of dots
+  while the ball actually travelled an arc. It now draws the real parabola —
+  same apex, same hang time — so what you line up is what you get.
+- **A ghost where he will be.** A ring shows where the man nearest your cursor
+  will have run to by the time the ball comes down, and turns green when your
+  cursor is on it. That is the lead, drawn.
+- **The markers say who is open.** Green if a receiver has a step on his cover,
+  amber if it is close, red if he is smothered — instead of an identical marker
+  over everybody telling you only where they stood.
+- **Pressure is visible before you release, not after.** With a rusher inside
+  the pocket the reticle reddens and shakes, which is exactly what the scatter
+  is about to do to the throw.
+
+And the quarterback now has a throwing animation, which he had gone this entire
+project without: `throwIt` holds the ball cocked behind his ear for the length
+of the windup, `release` is the follow-through with the ball already gone.
+`tackle` is a defender reaching, so a man goes to the floor because somebody put
+him there rather than falling over next to a bystander.
+
+`tools/test.js` checks the sheet itself: every grid rectangular, every character
+a colour the palette knows, and the run cycle naming frames that exist. A row
+typed one character short is invisible in the source and extremely visible on
+the field.
 
 **Effects are driven by watching the simulation, never by it.** The renderer
 notices a completion, a body hitting the deck or a ball in the air and produces

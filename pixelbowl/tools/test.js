@@ -595,6 +595,32 @@ section("7e. a career");
   A.SCREEN = "title";
 }
 
+section("7f. the sprite sheet");
+{
+  // Every frame is a hand-typed grid of characters. A row one character short
+  // is invisible in the source and very visible on the field, and a stray
+  // letter silently paints nothing at all.
+  const legal = new Set([".", "k", "h", "f", "s", "j", "t", "p", "c", "b", "l"]);
+  let ragged = null, stray = null;
+  const frames = Object.keys(A.ART);
+  for (const name of frames) {
+    const grid = A.ART[name];
+    const w = grid[0].length;
+    for (const row of grid) {
+      if (row.length !== w) ragged = ragged || `${name}: a row is ${row.length} wide, not ${w}`;
+      for (const ch of row) if (!legal.has(ch)) stray = stray || `${name}: '${ch}'`;
+    }
+  }
+  console.log(`   ${frames.length} frames: ${frames.join(", ")}`);
+  check("every sprite grid is rectangular", !ragged, ragged);
+  check("every pixel is a colour the palette knows", !stray, stray);
+  check("the throw is animated", frames.includes("throwIt") && frames.includes("release"),
+        frames.join(","));
+  // The run cycle has to name frames that exist, or a runner flickers.
+  const missing = A.RUN_CYCLE.filter(n => !A.ART[n]);
+  check("the run cycle names real frames", !missing.length, missing.join(","));
+}
+
 section("8. units");
 {
   check("field label reads from your side", A.fieldLabel(60, true) === "MIDFIELD", A.fieldLabel(60, true));
