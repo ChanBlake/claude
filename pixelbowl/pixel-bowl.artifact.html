@@ -218,6 +218,7 @@ const CFG = {
   throwWind: 0.16,
   maxThrow: 60,          // yards, cursor reach from the quarterback
   carrierAvoid: 6,       // yards a runner "feels" traffic inside
+  ballMagnet: 11,        // how far a man will break off to go and get a throw
   pursueLead: 1.5,       // seconds of intercept lead a defender may aim at
   // How long it takes to diagnose a run: the box reacts almost at once, the
   // secondary has to respect the pass first.
@@ -596,9 +597,9 @@ const DIFFS = [
   // cover  how hard a defender in position makes the catch
   // learn  how strongly they notice what you keep calling
   // drive  a thumb on the scale of their own simulated possession
-  { name: "ROOKIE",  read: 0.5,  react: 1.3,  cover: 0.85, learn: 0.6,  drive: 0.0 },
-  { name: "PRO",     read: 0.72, react: 1.00, cover: 1.0,  learn: 0.62, drive: 0.05 },
-  { name: "ALL-PRO", read: 0.90, react: 0.72, cover: 1.25, learn: 0.92, drive: 0.11 },
+  { name: "ROOKIE",  read: 0.5,  react: 1.3,  cover: 0.85, learn: 0.6,  drive: -0.03 },
+  { name: "PRO",     read: 0.72, react: 1.00, cover: 1.0,  learn: 0.62, drive: 0.005 },
+  { name: "ALL-PRO", read: 0.90, react: 0.72, cover: 1.25, learn: 0.92, drive: 0.06 },
 ];
 
 /* ===================================================================
@@ -1420,7 +1421,7 @@ function makePlay(o) {
     const j = p.job;
     if (j.t !== "route" && j.t !== "delay") return false;
     const d = dist(p.x, p.y, S.ball.tx, S.ball.ty);
-    if (d > 11) return false;
+    if (d > CFG.ballMagnet) return false;
     setWant(p, S.ball.tx - p.x, S.ball.ty - p.y);
     return true;
   }
@@ -1482,6 +1483,10 @@ function makePlay(o) {
   }
 
   function defenseAI(p) {
+    // Only `pursue` turns this back on. Without the reset a man who chased once
+    // stayed flagged as sprinting for the rest of the play and burned his legs
+    // standing in a zone.
+    p.sprint = false;
     if (p.mot === "engaged") { setWant(p, S.ball.x - p.x, S.ball.y - p.y); return; }
     if (ballIsRunning() && readsRun(p)) return pursue(p);
     const j = p.job;
@@ -1495,7 +1500,10 @@ function makePlay(o) {
     if (j.t === "man") {
       const t = P[j.i];
       if (!t || t.mot === "down") return zoneAI(p, 0, 10, 10);
-      if (S.ball.state === "air" && dist(S.ball.tx, S.ball.ty, p.x, p.y) < 9) {
+      // The same radius the receiver gets. It used to be nine against his
+      // eleven, so a ball thrown at the grass between them was the receiver's
+      // by arithmetic before anybody ran a step.
+      if (S.ball.state === "air" && dist(S.ball.tx, S.ball.ty, p.x, p.y) < CFG.ballMagnet) {
         setWant(p, S.ball.tx - p.x, S.ball.ty - p.y);
         return;
       }
@@ -1693,6 +1701,11 @@ function makePlay(o) {
     if (c.x <= 0.15 || c.x >= FIELD.W - 0.15) {
       c.mot = "down";
       if (S.turnover) return end(S.passAttempted && !S.completed ? "int" : "fumble", c.x, c.y, "OUT OF BOUNDS");
+      // A quarterback who runs out of bounds behind his own line is sacked, not
+      // credited with a rush for minus nine — which is what this used to do, and
+      // it was most of the negative rushing yards in a game with no run calls.
+      if (c.idx === 0 && play.kind === "pass" && !S.threw && c.y < S.los)
+        return end("sack", c.x, c.y, "SACKED FOR " + Math.round(S.los - c.y));
       return end("oob", c.x, c.y, "OUT AT " + gainLine(c.y - S.los).toLowerCase().toUpperCase());
     }
   }
@@ -1774,8 +1787,10 @@ function newGame(myAb, oppAb) {
     kick: null,            // live kick state
     drive: null,           // opponent drive ticker
     stats: {
-      us:   { plays: 0, yards: 0, first: 0, pass: 0, rush: 0, td: 0, to: 0, comp: 0, att: 0 },
-      them: { plays: 0, yards: 0, first: 0, pass: 0, rush: 0, td: 0, to: 0, comp: 0, att: 0 },
+      us:   { plays: 0, yards: 0, first: 0, pass: 0, rush: 0, td: 0, to: 0, comp: 0, att: 0,
+              drives: 0, startSum: 0 },
+      them: { plays: 0, yards: 0, first: 0, pass: 0, rush: 0, td: 0, to: 0, comp: 0, att: 0,
+              drives: 0, startSum: 0 },
     },
     longestTD: 0,
     tend: { run: 0, pass: 0 },   // what you have been calling lately
@@ -1796,6 +1811,14 @@ function say(text, secs = 1.4, tone = "flood") {
 /* ---- spotting ---------------------------------------------------- */
 function giveUs(y) {
   const s = G.st;
+  // A new possession, not a fresh set of downs. Where your drives begin is the
+  // single most useful number for telling a good offence from a short field,
+  // and there was no way to see it from inside the game.
+  if (s.poss !== "us" && s.tryFor !== "us2") {
+    const st = s.stats.us;
+    st.drives++;
+    st.startSum += FIELD.oppGoal - clamp(y, FIELD.ownGoal + 0.5, FIELD.oppGoal - 0.5);
+  }
   s.poss = "us";
   s.los = clamp(y, FIELD.ownGoal + 0.5, FIELD.oppGoal - 0.5);
   s.down = 1;
@@ -2011,8 +2034,18 @@ function startTheirDrive(startY, afterTheirScore = false) {
 
 function simulateTheirDrive() {
   const s = G.st, d = s.drive, rng = RNG;
-  const edge = (s.opp.str - s.my.str) * 0.012;      // their quality against yours
-  const diffBonus = DIFFS[SETTINGS.diff].drive;
+  // Their quality against yours. This used to be ×0.012, which combined with
+  // the multipliers below scaled their yardage anywhere from 6% to 164% of
+  // normal — so picking the best team in the league against a middling one
+  // quietly shut the opponent out, and the margin came from the team select
+  // screen rather than from anything you did with the ball.
+  const edge = (s.opp.str - s.my.str) * 0.004;
+  // How well the possession goes: the strength gap plus the difficulty's thumb
+  // on the scale, bounded. This used to be added straight onto the outcome roll
+  // and compared against fixed thresholds, which meant a large enough bonus
+  // made an interception arithmetically impossible — at PRO the opponent could
+  // not throw one at all. It now bends each threshold by a fraction of itself.
+  const lift = clamp(edge + DIFFS[SETTINGS.diff].drive, -0.09, 0.09);
   let los = s.los, down = 1, toGo = 10, guard = 0;
 
   const toGoal = () => los - FIELD.ownGoal;
@@ -2023,28 +2056,28 @@ function simulateTheirDrive() {
     let line, yards = 0, over = false;
 
     if (passing) {
-      const roll = rng.unit() + edge + diffBonus;
-      if (roll < 0.042) {
+      const roll = rng.unit();
+      if (roll < 0.029 - lift * 0.18) {
         d.events.push({ text: "INTERCEPTED", los, kind: "turnover" });
         d.endY = clamp(los + rng.range(-6, 14), FIELD.ownGoal + 1, FIELD.oppGoal - 1);
         d.result = "turnover"; over = true;
-      } else if (roll < 0.17) {
+      } else if (roll < 0.16 - lift * 0.5) {
         yards = -rng.range(5, 9);
         line = "SACKED FOR " + Math.round(-yards);
-      } else if (roll < 0.42) {
+      } else if (roll < 0.42 - lift * 1.1) {
         line = "PASS INCOMPLETE";
       } else {
-        yards = rng.range(4, deep ? 10 : 18) * (0.85 + edge * 6);
+        yards = rng.range(3, deep ? 9 : 19) * clamp(1 + lift * 1.6, 0.8, 1.25);
         line = "PASS FOR " + Math.round(yards);
       }
     } else {
-      const roll = rng.unit() + edge + diffBonus;
-      if (roll < 0.018) {
+      const roll = rng.unit();
+      if (roll < 0.012 - lift * 0.08) {
         d.events.push({ text: "FUMBLE — YOU RECOVER", los, kind: "turnover" });
         d.endY = clamp(los, FIELD.ownGoal + 1, FIELD.oppGoal - 1);
         d.result = "turnover"; over = true;
       } else {
-        yards = rng.range(-3, deep ? 7 : 12) * (0.9 + edge * 5);
+        yards = rng.range(-3, deep ? 7 : 12) * clamp(1 + lift * 1.6, 0.8, 1.25);
         line = "RUN FOR " + Math.round(yards);
       }
     }
@@ -2994,13 +3027,17 @@ function drawFinal() {
   button("again", lx - 66, ARTH - 52, 132, 20, "REMATCH", { primary: true });
   button("menu", lx - 66, ARTH - 28, 132, 18, "MAIN MENU");
 
+  const u = s.stats.us;
+  const avgStart = u.drives ? u.startSum / u.drives : 0;
   const rows = [
-    ["FIRST DOWNS", s.stats.us.first],
-    ["TOTAL YARDS", Math.round(s.stats.us.yards)],
-    ["PASSING", Math.round(s.stats.us.pass)],
-    ["RUSHING", Math.round(s.stats.us.rush)],
-    ["COMP / ATT", s.stats.us.comp + "/" + s.stats.us.att],
-    ["TURNOVERS", s.stats.us.to],
+    ["FIRST DOWNS", u.first],
+    ["TOTAL YARDS", Math.round(u.yards)],
+    ["PASSING", Math.round(u.pass)],
+    ["RUSHING", Math.round(u.rush)],
+    ["COMP / ATT", u.comp + "/" + u.att],
+    ["TURNOVERS", u.to],
+    ["TOUCHDOWNS", u.td],
+    ["DRIVES BEGAN", u.drives ? fieldLabel(FIELD.oppGoal - avgStart, true) : "-"],
   ];
   const pw = Math.round(ARTW * 0.38), px0 = Math.round(ARTW * 0.56);
   const ph = rows.length * 12 + 16;

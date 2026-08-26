@@ -85,6 +85,7 @@ browser drives it, so the tests exercise shipping code rather than a copy.
 ```bash
 node tools/test.js        # 95 checks: termination, determinism, rules, balance
 node tools/skill.js       # the same games played by four different standards of thumb
+node tools/cpu.js         # points per drive for the opponent's simulated possession
 node tools/balance.js     # plays whole games, reports the numbers you'd feel
 node tools/drives.js      # where possessions start and what they produce
 node tools/plays.js       # a few hundred snaps of each play, low variance
@@ -138,10 +139,16 @@ twelve games a cell — small enough that these move a few points run to run):
 
 | | ROOKIE | PRO | ALL-PRO |
 |---|---|---|---|
-| Ordinary | +19 | +2 | +4 |
-| Careful | +14 | +5 | 0 |
-| Sharp | +10 | +2 | −4 |
-| One play, over and over | +19 | −1 | −7 |
+| Ordinary | +12 | −5 | −2 |
+| Careful | +11 | +6 | −1 |
+| Sharp | +10 | +1 | −12 |
+| One play, over and over | +14 | 0 | −11 |
+
+The opponent's simulated possession is worth **1.5 / 1.8 / 2.6 points a drive**
+across the three grades, against a real-football 2.2 — which with seven or eight
+possessions a side is the whole difficulty ladder in one number
+(`tools/cpu.js`; the drive simulator is cheap enough to run four hundred
+possessions in a second, so it is tuned directly rather than through whole games).
 
 Play counts are low and yards per play high because a quarter is three minutes,
 not fifteen — the game is a highlight reel of a game, not a game.
@@ -201,6 +208,40 @@ Difficulty also does more than it used to. It was two numbers — how often the
 CPU called the right front, and a reaction lag. It now also sets how hard a
 defender in position makes a catch, how quickly they read your tendencies, and
 how well their own possession goes.
+
+### Where the margin was actually coming from
+
+A third round came back 56–3, and the honest answer is that **I could not
+reproduce it** — the best scripted player I can write scores about twenty. But
+chasing it turned up four real faults, three of them in the half of the game you
+never touch:
+
+1. **Team strength had an absurd grip on the opponent's possession.** `edge` was
+   `(their strength − yours) × 0.012`, and it was then multiplied by six inside
+   the yardage roll *and* added straight onto every outcome threshold. Across the
+   eight teams that scaled their yardage anywhere from 6% to 164% of normal. Pick
+   the best team in the league against a middling one and the CPU is quietly shut
+   out — the margin comes from the team-select screen rather than from anything
+   you did with the ball. It is a quarter of the size now, and bounded.
+
+2. **A large enough difficulty bonus made an interception impossible.** The bonus
+   was added to the outcome roll and compared against fixed thresholds, so at PRO
+   the threshold went negative and the opponent could not throw a pick at all.
+   Difficulty now bends each threshold by a fraction of itself instead.
+
+3. **The ball magnet was one-sided.** A receiver breaks off his route for a throw
+   in the air from eleven yards away; a defender in man coverage only broke on it
+   from nine. A ball thrown at the grass between them was the receiver's by
+   arithmetic before anybody ran a step. Same radius for both now.
+
+4. A quarterback who ran out of bounds behind his own line was credited with a
+   rush for minus nine rather than being sacked, which was most of the negative
+   rushing yardage in games with no run calls.
+
+The final screen now reports **TOUCHDOWNS** and **DRIVES BEGAN** — the average
+yard line your possessions started on. Between them and TOTAL YARDS, a scoreline
+is self-diagnosing: eight touchdowns from 192 yards means short fields, not a
+good passing day, and there was no way to see that from inside the game.
 
 ### Two bugs that were control, not simulation
 
