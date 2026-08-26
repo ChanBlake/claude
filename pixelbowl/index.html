@@ -170,6 +170,11 @@ html, body {
    CONFIG — every number that decides how the game feels.
    Nothing below hard-codes a speed, a radius or a probability.
    =================================================================== */
+/* The build, shown on the title screen. It is here so that "am I actually
+   running the new one?" is a question you can answer by looking, rather than
+   by clearing site data and hoping. `tools/stamp.py` sets it. */
+const VERSION = "2026-08-26.d5fb134";
+
 const CFG = {
   // Field, in yards. Narrowed from regulation: on a portrait phone a
   // 53-yard-wide field puts both sidelines off screen and the play stops
@@ -4788,6 +4793,7 @@ function drawTitle() {
     ? RECORD.won + "-" + RECORD.lost + (RECORD.tied ? "-" + RECORD.tied : "") + "   BEST " + RECORD.best
     : "NO GAMES PLAYED YET";
   text(rec, ARTW / 2, ARTH - FOOT + 4, { color: COL.dim, shadow: false });
+  text(VERSION, ARTW - 8, ARTH - FOOT + 4, { align: 1, color: "#3E4C58", shadow: false });
 }
 
 function seasonSub() {
@@ -5810,7 +5816,21 @@ resize();
 if (typeof navigator !== "undefined" && "serviceWorker" in navigator
     && typeof window !== "undefined" && window.isSecureContext) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js").catch(() => {});
+    // The version in the query is what makes the browser treat this as a NEW
+    // worker script. Without it the phone keeps the one it has — for up to a
+    // day — and a new build never gets a chance to install.
+    navigator.serviceWorker.register("./sw.js?v=" + VERSION).then(reg => {
+      reg.update().catch(() => {});
+    }).catch(() => {});
+
+    // When a new worker takes over, the page in front of you is still the old
+    // one. Reload it, exactly once.
+    let swapped = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (swapped) return;
+      swapped = true;
+      location.reload();
+    });
   });
 }
 </script>
