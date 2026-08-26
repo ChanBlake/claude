@@ -239,7 +239,11 @@ const CFG = {
   catchBase: 0.90,
   catchRating: 0.004,
   pickShare: 0.15,
-  contestFade: 0.45,     // catch odds lost to a defender with position
+  // Bodies no longer push each other apart, so a defender in coverage can
+  // stand exactly where the receiver is standing rather than being shoved
+  // off him — which made every contested ball harder than it was meant to
+  // be. Eased to pay that back.
+  contestFade: 0.39,     // catch odds lost to a defender with position
   scatterBase: 1.4,
   scatterPressure: 2.4,
   pressureR: 2.0,
@@ -2053,14 +2057,27 @@ function makePlay(o) {
     separate();
   }
 
-  // Fourteen bodies, so an O(n²) push-apart is free and reads better than
-  // any spatial structure would.
+  /* Bodies only stop each other where football says they should: a blocker
+     and the man he has hold of, and anyone closing on the ball carrier.
+     Everywhere else they run straight through one another.
+
+     Every man pushing every other man apart was fine with fourteen on the
+     field and awful with twenty-two: any two who wanted the same patch of
+     grass ground against each other for the rest of the down, the push-apart
+     shoving them off it and their own AI walking them straight back on. What
+     you saw was two men jogging into each other forever, which is not
+     something that happens in football. */
   function separate() {
     const min = 0.8;
+    const ball = carrier();
     for (let i = 0; i < P.length; i++) {
       if (P[i].mot === "down") continue;
       for (let j = i + 1; j < P.length; j++) {
         if (P[j].mot === "down") continue;
+        const a = P[i], b = P[j];
+        const locked = a.eng === b.id || b.eng === a.id;
+        const atBall = ball && (a === ball || b === ball) && attacking(a) !== attacking(b);
+        if (!locked && !atBall) continue;
         const dx = P[j].x - P[i].x, dy = P[j].y - P[i].y;
         const d = Math.hypot(dx, dy);
         if (d >= min || d < 1e-6) continue;
