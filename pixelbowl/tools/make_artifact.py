@@ -21,7 +21,10 @@ def main():
     html = open(SRC).read()
 
     title = re.search(r"<title>(.*?)</title>", html, re.S).group(1)
-    fonts = re.search(r'<link rel="stylesheet" href="https://fonts\.googleapis[^>]*>', html).group(0)
+    # The game stopped depending on a font host when the bitmap face went
+    # back in; tolerate the link being gone.
+    m = re.search(r'<link rel="stylesheet" href="https://fonts\.googleapis[^>]*>', html)
+    fonts = m.group(0) if m else ""
     style = re.search(r"<style>\n(.*?)\n</style>", html, re.S).group(1)
     body = re.search(r"<body>\n(.*?)\n<script>", html, re.S).group(1)
     script = re.search(r"<script>\n(.*?)\n</script>", html, re.S).group(1)
@@ -30,7 +33,7 @@ def main():
     # still apply — but the viewport unit has to survive being in an iframe.
     parts = [
         "<title>%s</title>" % title,
-        fonts,
+    ] + ([fonts] if fonts else []) + [
         "<style>\n%s\n</style>" % style,
         body.strip(),
         "<script>\n%s\n</script>" % script,

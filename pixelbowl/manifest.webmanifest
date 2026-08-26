@@ -1,0 +1,16 @@
+{
+  "name": "Pixel Bowl",
+  "short_name": "Pixel Bowl",
+  "description": "Four downs, one thumb. A pixel football game with a career that lasts.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0E141A",
+  "theme_color": "#0E141A",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

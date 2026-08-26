@@ -1,5 +1,4 @@
 <title>Pixel Bowl</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600&family=IBM+Plex+Mono:wght@400;600&display=swap">
 <style>
 /* ------------------------------------------------------------------
    Pixel Bowl — the shell.
@@ -17,8 +16,11 @@
   --flood:  #F5C542;   /* sodium vapour — the one bold colour */
   --ink:    #E6EDF2;
   --dim:    #8296A3;
-  --display: "Oswald", "Helvetica Neue", Arial, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* System faces only. Everything inside the canvas is drawn from the
+     bitmap face in the script, so the game has no font host to fail on and
+     nothing at all to download. */
+  --display: "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 * { box-sizing: border-box; }
@@ -203,7 +205,7 @@ const CFG = {
   engageR: 1.1,
   disengageR: 2.1,
   engagedSpeed: 0.12,
-  shedRate: 0.42,
+  shedRate: 0.54,
   shedRating: 0.011,
   shedImmune: 0.5,
 
@@ -338,8 +340,8 @@ function makeRatings(pos, strength, rng) {
   return out;
 }
 
-const OFF_POS = ["QB", "RB", "WR", "WR", "TE", "OL", "OL"];
-const DEF_POS = ["DL", "DL", "LB", "LB", "CB", "CB", "S"];
+const OFF_POS = ["QB", "RB", "WR", "WR", "TE", "OL", "OL", "OL", "OL", "OL", "OL"];
+const DEF_POS = ["DL", "DL", "LB", "LB", "CB", "CB", "S", "DL", "DL", "LB", "S"];
 
 function makeRoster(team, seed) {
   const rng = makeRNG(seed);
@@ -802,6 +804,50 @@ const UNDER = [
   { x:  2.0, y: 0 },
 ];
 
+/* ---- the other four, on each side ----------------------------------
+   Every formation and every defensive front in this file is written as
+   the seven men who decide the play. The other four line up, block,
+   rush and cover, and are never on your roster — which is the whole
+   trick: you manage a handful of players you know by name, and eleven
+   men take the field.
+
+   They are appended at play-build time rather than typed into twenty-one
+   arrays, so adding a formation or a front still means writing seven
+   entries.
+   ------------------------------------------------------------------ */
+const FILL_OFF = [
+  { pos: "OL", x:  0.0, y: 0 },     // centre, over the ball
+  { pos: "OL", x: -4.4, y: 0 },     // left tackle
+  { pos: "OL", x: -6.8, y: 0 },     // and a wing either side of the front
+  { pos: "OL", x:  6.8, y: 0 },
+];
+// Deliberately NOT four more men in the box. The first cut of this put two
+// ends inside and a linebacker on the run fill, and a dive went from five
+// yards to two — eleven on eleven has to add a defence, not a wall. These
+// two rush off the edge, the linebacker takes a hook zone, and the safety
+// plays over the top.
+// The spare four take their orders from the front they are joining. Adding
+// the SAME four men to all nine schemes flattened the difference between
+// them — a goal-line front and a prevent shell gave up the same dive — and
+// telling one defence from another is the only thing a defensive playbook
+// is for. A run-first look walks its extra linebacker up into the box; a
+// coverage look drops him into a hook and plays its spare safety over the
+// top of everything.
+function fillDef(scheme) {
+  const stout = scheme.vsRun >= 0.6;
+  const deep = clamp(9 + (scheme.vsPass - 0.6) * 26, 6, 19);
+  return [
+    { pos: "DL", x: -7.6, y: stout ? 1.1 : 1.9, job: { t: "contain", side: -1 } },
+    { pos: "DL", x:  7.6, y: stout ? 1.1 : 1.9, job: { t: "contain", side: 1 } },
+    { pos: "LB", x: 0, y: stout ? 3.6 : 7.5,
+      job: stout ? { t: "fill", bias: 0.3 } : { t: "zone", x: 0, y: 9.5, r: 7 } },
+    { pos: "S", x: 0, y: deep, job: { t: "zone", x: 0, y: deep + 3, r: 12 } },
+  ];
+}
+
+const fullForm = form => form.concat(FILL_OFF);
+const fullAlign = scheme => scheme.align.concat(fillDef(scheme));
+
 const R = (x, y, s = 1) => ({ x, y, s });
 
 const PLAYS = [
@@ -1064,7 +1110,7 @@ const schemeBy = id => SCHEMES.find(s => s.id === id) || SCHEMES[0];
 // quarterback really gets — the label is not printed on their shirts.
 function readLook(scheme) {
   let deep = 0, box = 0, press = 0;
-  for (const a of scheme.align) {
+  for (const a of fullAlign(scheme)) {
     if (a.y >= 10) deep++;                       // standing off, playing back
     else if (Math.abs(a.x) >= 8.5) { if (a.y <= 3) press++; }   // on the receiver
     else if (a.y <= 6) box++;                    // close enough to be coming
@@ -1125,14 +1171,33 @@ function makePlay(o) {
   const P = [];
   const spot = { x: o.ballX, y: o.los };
 
-  play.form.forEach((a, i) => {
-    const prof = o.offense.off[i];
+  const form = fullForm(play.form);
+  const align = fullAlign(scheme);
+  // A play's jobs list covers the seven it was written for; the men behind
+  // them block on a run and protect on a pass, which is what they are for.
+  const oJobs = play.jobs.slice();
+  while (oJobs.length < form.length)
+    oJobs.push(play.kind === "run" ? { t: "block", bias: 0 } : { t: "pass" });
+  const dJobs = scheme.jobs.concat(fillDef(scheme).map(f => f.job));
+
+  // A club's spare linemen are as good as the club is. No randomness: they
+  // would otherwise be re-rolled on every single snap.
+  const fillFor = (list, pos, i) => {
+    const avg = list.length
+      ? list.reduce((n, m) => n + overallOf(m), 0) / list.length : 62;
+    const base = BASE[pos], r = {};
+    for (const k in base) r[k] = clamp(Math.round(base[k] + (avg - 62) * 0.6), 5, 99);
+    return { pos, i, num: 50 + i, r };
+  };
+
+  form.forEach((a, i) => {
+    const prof = o.offense.off[i] || fillFor(o.offense.off, FILL_OFF[i - play.form.length].pos, i);
     P.push({
       id: i, side: "off", idx: i, pos: prof.pos, num: prof.num, r: prof.r,
       x: clamp(spot.x + a.x, 1.4, FIELD.W - 1.4),
       y: clamp(spot.y + a.y, FIELD.ownGoal - 2, FIELD.oppGoal - 0.5),
       vx: 0, vy: 0, face: Math.PI / 2, mot: "set", timer: 0, stamina: 1,
-      job: play.jobs[i], route: null, ri: 0, rspeed: 1,
+      job: oJobs[i], route: null, ri: 0, rspeed: 1,
       hasBall: false, breaks: 0, slowT: 0, eng: -1, shed: 0, immune: 0, delay: 0,
       tgt: -1, hold: null,
     });
@@ -1140,20 +1205,22 @@ function makePlay(o) {
   // Near the goal line there is no room behind the defence, so the whole front
   // compresses in proportion rather than every defender piling onto the last
   // legal yard — which is what a hard clamp produces, and it plays like a wall.
-  const deepest = scheme.align.reduce((m, a) => Math.max(m, a.y), 1);
+  const deepest = align.reduce((m, a) => Math.max(m, a.y), 1);
   const room = FIELD.oppGoal + 2 - spot.y;
   const squeeze = room < deepest ? Math.max(0.35, room / deepest) : 1;
 
-  scheme.align.forEach((a, i) => {
-    const prof = o.defense.def[i];
+  align.forEach((a, i) => {
+    const prof = o.defense.def[i]
+      || fillFor(o.defense.def, align[i].pos, i);
     P.push({
-      id: 7 + i, side: "def", idx: i, pos: prof.pos, num: prof.num, r: prof.r,
+      // Offence holds ids 0..form.length-1, so the defence starts after it.
+      id: form.length + i, side: "def", idx: i, pos: prof.pos, num: prof.num, r: prof.r,
       x: clamp(spot.x + a.x, 1.4, FIELD.W - 1.4),
       // A deep safety may stand in the end zone — that is where he belongs,
       // and it is why a prevent look gives up the goal-line run.
       y: clamp(spot.y + a.y * squeeze, FIELD.ownGoal + 0.5, FIELD.oppGoal + 2),
       vx: 0, vy: 0, face: -Math.PI / 2, mot: "set", timer: 0, stamina: 1,
-      job: scheme.jobs[i], route: null, ri: 0, rspeed: 1,
+      job: dJobs[i], route: null, ri: 0, rspeed: 1,
       hasBall: false, breaks: 0, slowT: 0, eng: -1, shed: 0, immune: 0, delay: 0,
       tgt: -1, hold: null,
     });
@@ -1465,7 +1532,7 @@ function makePlay(o) {
   S.end = end;
 
   // ----- steering ------------------------------------------------------
-  const want = new Array(14).fill(null).map(() => ({ x: 0, y: 0 }));
+  const want = P.map(() => ({ x: 0, y: 0 }));
   const setWant = (p, x, y, mul = 1) => {
     const l = Math.hypot(x, y);
     const s = speedOf(p) * mul;
@@ -5357,4 +5424,16 @@ document.getElementById("start").addEventListener("click", () => {
 
 // Size the canvas immediately so the first paint is not a flash of nothing.
 resize();
+
+/* ---- installed, and offline -----------------------------------------
+   Served from any https origin, this registers a worker that caches the
+   whole game, which is what turns "Add to Home Screen" into an app that
+   opens on the underground. Anywhere it cannot register — a file:// copy,
+   an embed — it simply does not, and the game is unaffected.
+   ------------------------------------------------------------------ */
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  });
+}
 </script>

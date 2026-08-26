@@ -20,7 +20,7 @@ function check(name, cond, detail) {
 function section(t) { console.log("\n" + t); }
 
 const A = loadGame();
-const { CFG, FIELD, TEAMS, PLAYS, SCHEMES, makeRNG, makeRoster, makePlay, clamp } = A;
+const { CFG, FIELD, TEAMS, PLAYS, SCHEMES, makeRNG, makeRoster, makePlay, clamp, OFF_POS } = A;
 
 const finite = v => typeof v === "number" && Number.isFinite(v);
 
@@ -473,8 +473,11 @@ section("7c. turnover returns");
   }
   const avgMoving = samples ? movingTotal / samples : 0;
   const avgToward = samples ? towardTotal / samples : 0;
-  console.log(`   ${samples} picks sampled: ${avgMoving.toFixed(1)} of 7 moving, ` +
-              `${avgToward.toFixed(1)} of 7 running at the returner`);
+  // Eleven a side now, so the denominator comes from the squad rather than
+  // from a seven that used to be true.
+  const chasers = OFF_POS.length;
+  console.log(`   ${samples} picks sampled: ${avgMoving.toFixed(1)} of ${chasers} moving, ` +
+              `${avgToward.toFixed(1)} of ${chasers} running at the returner`);
   check("enough picks to judge", samples > 20, String(samples));
   check("the intercepted team does not freeze", avgMoving >= 3.5, avgMoving.toFixed(1));
   check("they run at the returner", avgToward >= 2.5, avgToward.toFixed(1));

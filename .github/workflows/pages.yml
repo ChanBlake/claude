@@ -1,0 +1,44 @@
+# Publishes Pixel Bowl to GitHub Pages.
+#
+# The point of this is the phone: served from https, the game registers a
+# service worker, and "Add to Home Screen" in Safari then gives a real
+# full-screen app with its own icon that opens with no signal. No developer
+# certificate, no seven-day expiry, no Mac.
+#
+# One-time setup: repository Settings -> Pages -> Source: "GitHub Actions".
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ["pixelbowl/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble the site
+        run: |
+          mkdir -p _site
+          cp pixelbowl/index.html pixelbowl/manifest.webmanifest pixelbowl/sw.js _site/
+          cp pixelbowl/icon-*.png _site/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4
