@@ -168,10 +168,15 @@ const CFG = {
   // is zoomed in and follows the ball across the field as well as along it.
   visibleW: 23,
 
-  // Movement, yards per second.
-  speedMin: 4.0, speedMax: 9.4,
-  accelMin: 12, accelMax: 26,
-  turnMin: 5, turnMax: 12,
+  // Movement, yards per second. These were near real-life numbers, which is
+  // the wrong target: the field is narrowed to thirty yards and the camera
+  // only shows twenty-three of them, so everything is playing at a zoom that
+  // makes real speeds look like a fast-forward. Slower men also carry weight,
+  // and turn rate matters as much as top speed — twelve radians a second is
+  // two full spins, and it is what made every runner look twitchy.
+  speedMin: 3.4, speedMax: 7.6,
+  accelMin: 10, accelMax: 21,
+  turnMin: 4, turnMax: 9,
   sprintMul: 1.14,
 
   // Contact.
@@ -207,9 +212,11 @@ const CFG = {
   // How a throw fades with distance: free out to `deepFree` yards of flight,
   // then losing `deepFade` of catch probability per yard, capped.
   deepFree: 11, deepFade: 0.0135, deepFadeMax: 0.46,
-  passSpeed: 19,
+  // The ball has to be clearly faster than the men or a throw reads as a
+  // lob. At nineteen against a top speed of nine it was barely double.
+  passSpeed: 26,
   passArc: 0.16, passArcMax: 5,
-  catchR: 1.7,
+  catchR: 2.0,
   catchBase: 0.90,
   catchRating: 0.004,
   pickShare: 0.15,
@@ -1090,6 +1097,7 @@ function makePlay(o) {
       vx: 0, vy: 0, face: Math.PI / 2, mot: "set", timer: 0, stamina: 1,
       job: play.jobs[i], route: null, ri: 0, rspeed: 1,
       hasBall: false, breaks: 0, slowT: 0, eng: -1, shed: 0, immune: 0, delay: 0,
+      tgt: -1, hold: null,
     });
   });
   // Near the goal line there is no room behind the defence, so the whole front
@@ -1110,6 +1118,7 @@ function makePlay(o) {
       vx: 0, vy: 0, face: -Math.PI / 2, mot: "set", timer: 0, stamina: 1,
       job: scheme.jobs[i], route: null, ri: 0, rspeed: 1,
       hasBall: false, breaks: 0, slowT: 0, eng: -1, shed: 0, immune: 0, delay: 0,
+      tgt: -1, hold: null,
     });
   });
 
@@ -1139,6 +1148,7 @@ function makePlay(o) {
     threw: false, completed: false,
     catcher: null,            // idx of the man who caught it, for the season
     runT: null,               // when the defence first had a runner to chase
+    committed: false,         // ...and whether it has since committed to him
     graceUntil: 0,
     windup: -1, windupTo: null,
     shake: 0,
@@ -1484,14 +1494,30 @@ function makePlay(o) {
     setWant(p, rx + c.vx * t, ry + c.vy * t);
   }
 
+  // Who a blocker is going for. The man is KEPT once chosen: picking the
+  // nearest free rusher afresh every frame made two linemen swap assignments
+  // with each other every time the rush shifted a yard, and neither ever
+  // arrived. He only lets go if his man is blocked by someone else, is down,
+  // or has got a long way from him.
+  const freeRusher = (p, q) =>
+    q && !attacking(q) && q.mot === "run" && q.eng < 0 && q.immune <= 0 &&
+    !P.some(z => z !== p && z.eng === q.id);
+
   function blockTarget(p, aimX, aimY) {
+    const urgency = q => dist(q.x, q.y, aimX, aimY) + dist(q.x, q.y, p.x, p.y) * 0.35;
     let best = null, bd = Infinity;
     for (const q of P) {
-      if (attacking(q) || q.mot !== "run" || q.eng >= 0 || q.immune > 0) continue;
-      if (P.some(z => z.eng === q.id)) continue;
-      const d = dist(q.x, q.y, aimX, aimY) + dist(q.x, q.y, p.x, p.y) * 0.35;
+      if (!freeRusher(p, q)) continue;
+      const d = urgency(q);
       if (d < bd) { bd = d; best = q; }
     }
+    // Hysteresis on how urgent the man is, not on how far away he has got. A
+    // plain distance leash let a lineman chase his original man clean across
+    // the formation while somebody else walked in unblocked; a margin means
+    // he keeps his man unless another rusher is clearly the bigger problem.
+    const held = p.tgt >= 0 ? P[p.tgt] : null;
+    if (freeRusher(p, held) && urgency(held) <= bd + 2.5) return held;
+    p.tgt = best ? best.id : -1;
     return best;
   }
 
@@ -1534,7 +1560,14 @@ function makePlay(o) {
 
   function drive(dt, input) {
     for (let i = 0; i < P.length; i++) { want[i].x = 0; want[i].y = 0; }
-    if (S.runT == null && ballIsRunning()) S.runT = S.t;
+    // The read latches. `ballIsRunning` was re-evaluated every frame, so a
+    // quarterback stepping over the line and back flipped the whole defence
+    // between chasing and covering — eleven men changing their minds twice a
+    // second, which is most of what "everyone is running randomly" looked
+    // like. The clock only resets while nobody has committed yet.
+    if (ballIsRunning()) { if (S.runT == null) S.runT = S.t; }
+    else if (!S.committed) S.runT = null;
+    if (S.runT != null && S.t - S.runT >= CFG.runReadDeep) S.committed = true;
 
     const c = carrier();
     const aiming = S.qbHasIt() && !S.tucked;
@@ -1660,23 +1693,62 @@ function makePlay(o) {
       }
       const hx = home.x - qb.x, hy = home.y - qb.y;
       const hl = Math.hypot(hx, hy);
-      const bx = (hl > 0.5 ? hx / hl * 0.6 : 0) + ex * 0.9;
-      const by = (hl > 0.5 ? hy / hl * 0.6 : 0) + ey * 0.9;
-      setWant(p, bx, by, (ex || ey) ? 0.9 : 0.5);
+      // Getting to the spot dominates; pressure is a nudge off it. Weighting
+      // the two the other way round meant his direction was decided by
+      // whichever rusher happened to be nearest, and he danced.
+      const bx = (hl > 0.5 ? hx / hl : 0) + ex * 0.5;
+      const by = (hl > 0.5 ? hy / hl : 0) + ey * 0.5;
+      const mag = Math.hypot(bx, by);
+      if (mag < 0.12) { setWant(p, 0, 0); return; }
+      // Standing in a clean pocket is a stroll; feeling a rusher is a sprint.
+      const pressed = Math.hypot(ex, ey) > 0.01;
+      setWant(p, bx, by, pressed ? clamp(mag * 0.6, 0.5, 0.98)
+                                 : clamp(mag * 0.5, 0.2, 0.6));
     }
   }
 
+  // What a receiver does when his route runs out.
+  //
+  // This used to sum a repulsion vector from EVERY defender on the field and
+  // sprint down it at three-quarter speed, for ever. Two receivers standing
+  // near each other ran in opposite directions; one man between two defenders
+  // oscillated; nobody ever stopped. It was the single biggest reason the
+  // offence looked like it had no idea what it was doing.
+  //
+  // What he does now is what a receiver actually does: he holds the spot he
+  // broke to, leans a step or two off whoever is nearest, and stands there —
+  // unless the quarterback has left the pocket, in which case everybody works
+  // back toward him.
   function driftOpen(p) {
-    let ax = 0, ay = 0;
-    for (const q of P) {
-      if (q.side !== "def" || q.mot === "down") continue;
-      const d = dist(p.x, p.y, q.x, q.y);
-      if (d < 7 && d > 0.01) { ax += (p.x - q.x) / d * (7 - d); ay += (p.y - q.y) / d * (7 - d); }
+    if (!p.hold) p.hold = { x: p.x, y: p.y };
+    const qb = P[0];
+
+    // Scramble drill.
+    if (!S.threw && qb.hasBall && (S.tucked || Math.abs(qb.x - spot.x) > 5.5)) {
+      const side = Math.sign(qb.x - FIELD.W / 2) || 1;
+      const tx = clamp(qb.x + side * 5, 2, FIELD.W - 2);
+      const ty = clamp(Math.min(p.y, qb.y + 10), S.los + 1, FIELD.oppGoal + 4);
+      setWant(p, tx - p.x, ty - p.y, 0.8);
+      return;
     }
-    if (!ax && !ay) { ax = 0; ay = 1; }
-    if (p.x < 3) ax = Math.abs(ax) + 1;
-    if (p.x > FIELD.W - 3) ax = -Math.abs(ax) - 1;
-    setWant(p, ax, ay, 0.75);
+
+    let near = null, nd = Infinity;
+    for (const q of P) {
+      if (attacking(q) || q.mot === "down") continue;
+      const d = dist(p.x, p.y, q.x, q.y);
+      if (d < nd) { nd = d; near = q; }
+    }
+    let tx = p.hold.x, ty = p.hold.y;
+    if (near && nd < 5.5) {
+      const k = (5.5 - nd) / 5.5 * 2.4;
+      tx += (p.x - near.x) / (nd || 1) * k;
+      ty += (p.y - near.y) / (nd || 1) * k;
+    }
+    tx = clamp(tx, 2, FIELD.W - 2);
+    const dx = tx - p.x, dy = ty - p.y, d = Math.hypot(dx, dy);
+    // Close enough is close enough. He stops, and he stays stopped.
+    if (d < 0.7) { setWant(p, 0, 0); return; }
+    setWant(p, dx, dy, clamp(d / 3.5, 0.22, 0.7));
   }
 
   function anchorAI(p) {
@@ -1710,7 +1782,7 @@ function makePlay(o) {
     // standing in a zone.
     p.sprint = false;
     if (p.mot === "engaged") { setWant(p, S.ball.x - p.x, S.ball.y - p.y); return; }
-    if (ballIsRunning() && readsRun(p)) return pursue(p);
+    if ((S.committed || ballIsRunning()) && readsRun(p)) return pursue(p);
     const j = p.job;
 
     if (j.t === "rush" || j.t === "contain") {
@@ -1772,15 +1844,29 @@ function makePlay(o) {
       setWant(p, S.ball.tx - p.x, S.ball.ty - p.y);
       return;
     }
-    let threat = null, deepest = -Infinity;
-    for (const q of P) {
-      if (q.side !== "off" || (q.job.t !== "route" && q.job.t !== "delay")) continue;
-      if (dist(q.x, q.y, lx, ly) > zr) continue;
-      if (q.y > deepest) { deepest = q.y; threat = q; }
+    // The threat is chosen once and kept until he actually leaves — with a
+    // wider radius on the way out than on the way in. Re-picking the deepest
+    // man inside the zone every frame meant this defender's aim point jumped
+    // between a landmark and two different receivers as they crossed its
+    // edge, and he spent the play jittering between them.
+    let threat = p.tgt >= 0 ? P[p.tgt] : null;
+    if (threat && (threat.mot === "down" || dist(threat.x, threat.y, lx, ly) > zr * 1.45))
+      threat = null;
+    if (!threat) {
+      let deepest = -Infinity;
+      for (const q of P) {
+        if (q.side !== "off" || (q.job.t !== "route" && q.job.t !== "delay")) continue;
+        if (dist(q.x, q.y, lx, ly) > zr) continue;
+        if (q.y > deepest) { deepest = q.y; threat = q; }
+      }
+      p.tgt = threat ? threat.id : -1;
     }
-    const tx = threat ? lerp(lx, threat.x, 0.55) : lx;
-    const ty = threat ? lerp(ly, threat.y, 0.55) : ly;
-    if (Math.hypot(tx - p.x, ty - p.y) < 0.8) return;
+    // And the shade eases in with how close the threat is to the middle of
+    // the zone, rather than snapping to 55% the instant he crosses the line.
+    const w = threat ? 0.6 * clamp(1.25 - dist(threat.x, threat.y, lx, ly) / (zr * 1.45), 0.15, 1) : 0;
+    const tx = threat ? lerp(lx, threat.x, w) : lx;
+    const ty = threat ? lerp(ly, threat.y, w) : ly;
+    if (Math.hypot(tx - p.x, ty - p.y) < 0.8) { setWant(p, 0, 0); return; }
     setWant(p, tx - p.x, ty - p.y, threat ? 1 : 0.8);
   }
 
@@ -2868,7 +2954,11 @@ function resize() {
   // Landscape game: the field's width fits the screen's height.
   NEEDS_ROTATE = cssW < cssH * 1.15;
 
-  UNIT = Math.max(2, Math.round(cssH * dpr / CFG.artH));
+  // Held the wrong way up, the short side is the width — sizing off the long
+  // one gave a buffer a hundred pixels across and the turn-your-phone card
+  // ran off both edges of it.
+  const shortSide = NEEDS_ROTATE ? cssW : cssH;
+  UNIT = Math.max(2, Math.round(shortSide * dpr / CFG.artH));
   ARTH = Math.floor(cssH * dpr / UNIT);
   ARTW = Math.floor(cssW * dpr / UNIT);
 
@@ -3105,7 +3195,7 @@ const scrY = fx => VIEWTOP + (FIELD.W - fx) * PPY - camY;
    up turf, a caught ball is held for a beat, and a thrown ball leaves a
    trail so you can read where it is going.
    ------------------------------------------------------------------ */
-const FX = { puffs: [], trail: [], catchPose: null, throwPose: 0,
+const FX = { puffs: [], trail: [], catchPose: null, throwPose: 0, freeze: 0,
              prevBall: "dead", prevCaught: false, prevThrew: false };
 
 function fxReset() {
@@ -3127,6 +3217,7 @@ function fxUpdate(dt, sim) {
     if (FX.catchPose.t <= 0) FX.catchPose = null;
   }
   FX.throwPose = Math.max(0, FX.throwPose - dt);
+  FX.freeze = Math.max(0, FX.freeze - dt);
   if (!sim) { FX.trail.length = 0; FX.prevBall = "dead"; return; }
 
   // The follow-through starts on the frame the ball leaves his hand.
@@ -3160,6 +3251,10 @@ function fxUpdate(dt, sim) {
       p._puffed = true;
       const h = p.hit;
       puffAt(p.x + (h ? h.x * 0.4 : 0), p.y + (h ? h.y * 0.4 : 0), h ? 10 : 7, h ? 4.6 : 3.4);
+      // Hit stop. Everything holds for a couple of frames on contact, which is
+      // the oldest trick there is for making a collision land — without it two
+      // men simply pass through the moment of impact and are on the floor.
+      if (h && h.deep >= 1) FX.freeze = 0.085;
     }
     else if (p.mot !== "down") p._puffed = false;
   }
@@ -3280,6 +3375,9 @@ function blob(x, y, r, col, edge = 0.8) {
    Hand positions are in FORWARD-SPACE — +x is the way he is facing —
    so no pose has to know which way he is pointed.
    ------------------------------------------------------------------ */
+// Radians of leg swing per yard covered. At 4.4 a man at full speed took five
+// strides a second, which is a sprint cadence played at double speed.
+const STRIDE = 2.6;
 const EASE = (a, b, t) => a + (b - a) * t;
 const smooth = t => t * t * (3 - 2 * t);
 const approach = (cur, tgt, per, dt) => cur + (tgt - cur) * (1 - Math.pow(per, dt));
@@ -3327,6 +3425,25 @@ function animateFigure(p, pose, dt, sim, reach) {
     a.fall = approach(a.fall, 0, 0.02, dt);
     return a;
   }
+  if (pose === "down") {
+    // Two different men end up on the floor: the one who made the tackle has
+    // his arms clamped shut around the other, and the one who was carrying it
+    // throws his out. `deep` is what tells them apart.
+    const wrapping = p.hit && p.hit.deep < 1;
+    if (wrapping) { fx = 5.0; fy = 2.8; bx = 4.4; by = 3.6; lean = 1.6; crouch = 1.4; }
+    else { fx = 3.0; fy = -1.6; bx = -3.4; by = 0.4; lean = -0.5; crouch = 0.9; }
+    a.fx = approach(a.fx, fx, 0.00005, dt); a.fy = approach(a.fy, fy, 0.00005, dt);
+    a.bx = approach(a.bx, bx, 0.00005, dt); a.by = approach(a.by, by, 0.00005, dt);
+    a.lean = approach(a.lean, lean, 0.004, dt);
+    a.crouch = approach(a.crouch, crouch, 0.004, dt);
+    a.run = approach(a.run, 0, 0.0005, dt);
+    // A beat of wrap-and-drive before they go over, so the hit reads as a hit
+    // rather than as two men lying down next to each other.
+    a.hitT = (a.hitT || 0) + dt;
+    const deep = (p.hit && p.hit.deep) || 1;
+    a.fall = approach(a.fall, a.hitT > 0.12 ? deep : 0, 0.00002, dt);
+    return a;
+  }
   if (pose === "catch") {
     // Both hands go to the ball, wherever it actually is.
     fx = 3.2; fy = -4.4; bx = 2.0; by = -3.8;
@@ -3342,7 +3459,7 @@ function animateFigure(p, pose, dt, sim, reach) {
   } else if (pose === "run") {
     // Arms drive: they swing through a real arc rather than sliding sideways,
     // and they rise as they come forward.
-    const sw = Math.sin(p._stride * 4.4);
+    const sw = Math.sin(p._stride * STRIDE);
     fx = sw * 4.2; fy = 2.2 - Math.max(0, sw) * 2.4;
     bx = -sw * 4.2; by = 2.2 - Math.max(0, -sw) * 2.4;
     lean = 0.9;
@@ -3365,8 +3482,8 @@ function animateFigure(p, pose, dt, sim, reach) {
   // Going down takes a moment, and he keeps a little momentum into the turf.
   // Going down takes a moment. How far down depends on who you are: the man
   // with the ball ends up flat, the man who put him there lands across him.
-  const deep = (p.hit && p.hit.deep) || 1;
-  a.fall = approach(a.fall, pose === "down" ? deep : 0, pose === "down" ? 0.00002 : 0.02, dt);
+  a.hitT = 0;
+  a.fall = approach(a.fall, 0, 0.02, dt);
   return a;
 }
 
@@ -3585,6 +3702,7 @@ function drawRoutes() {
 function drawPlayers(dt) {
   const sim = G.play;
   fxUpdate(dt, sim);
+  if (FX.freeze > 0) dt = 0;          // poses and strides hold through a hit
   fxDrawPuffs();
   if (!sim) return;
   // Players nearer the bottom touchline overlap those behind them.
@@ -3629,7 +3747,7 @@ function drawPlayers(dt) {
       const hxs = scrX(p.y + p.hit.y) - cxA, hys = scrY(p.x + p.hit.x) - cyA;
       const hl = Math.hypot(hxs, hys) || 1;
       fallSide = hxs >= 0 ? 1 : -1;
-      const slide = smooth(clamp((p._an && p._an.fall) || 0, 0, 1)) * 3.4;
+      const slide = smooth(clamp((p._an && p._an.fall) || 0, 0, 1)) * 5.2;
       cxA += hxs / hl * slide; cyA += hys / hl * slide;
     }
 
@@ -3664,7 +3782,7 @@ function drawPlayers(dt) {
       reach = { x: rx * cap, y: ry * cap };
     }
     animateFigure(p, frame, dt, sim, reach);
-    drawFigure(p, team, frame, cxA, cyA, faceLeft, p._stride * 4.4, holding,
+    drawFigure(p, team, frame, cxA, cyA, faceLeft, p._stride * STRIDE, holding,
                fallSide || (faceLeft ? -1 : 1));
   }
 
@@ -3816,12 +3934,20 @@ function drawBanner() {
 
 function drawRotatePrompt() {
   rect(0, 0, ARTW, ARTH, COL.night);
-  const cx = ARTW / 2, cy = ARTH / 2;
+  const cx = Math.round(ARTW / 2), cy = Math.round(ARTH / 2);
+  // This is the one screen drawn on a portrait buffer, so nothing here may
+  // assume a landscape width: every size is picked from ARTW.
+  const head = "TURN YOUR PHONE", sub2 = "PIXEL BOWL IS PLAYED SIDEWAYS";
+  const hs = Math.max(1, Math.min(3, Math.floor((ARTW - 12) / textW(head))));
+  const ss = Math.max(1, Math.min(2, Math.floor((ARTW - 12) / textW(sub2))));
+
   // A little phone, lying down.
-  panel(cx - 22, cy - 26, 44, 26, COL.panel, COL.flood);
-  rect(cx - 16, cy - 20, 32, 14, COL.turf);
-  text("TURN YOUR PHONE", cx, cy + 12, { scale: 2, color: COL.flood });
-  text("PIXEL BOWL IS PLAYED SIDEWAYS", cx, cy + 30, { color: COL.dim });
+  const pw = Math.min(52, Math.round(ARTW * 0.4)), ph = Math.round(pw * 0.62);
+  panel(cx - Math.round(pw / 2), cy - ph - 16, pw, ph, COL.panel, COL.flood);
+  rect(cx - Math.round(pw / 2) + 5, cy - ph - 11, pw - 10, ph - 10, COL.turf);
+
+  text(head, cx, cy - 2, { scale: hs, color: COL.flood });
+  text(sub2, cx, cy + 6 + GH * hs, { scale: ss, color: COL.dim });
 }
 
 /* ===================================================================
@@ -4886,7 +5012,7 @@ function update(dt) {
   }
 
   if (s.phase === "result") {
-    if (G.play) G.play.settle(dt);
+    if (G.play && FX.freeze <= 0) G.play.settle(dt);
     G.resultT -= dt;
     if (G.resultT <= 0) {
       const r = G.play.result;
