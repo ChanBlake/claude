@@ -378,6 +378,50 @@ have already declared, and this is you playing it. Your run/pass tendency counts
 what you *ran*, not what you first selected, so an audible does not lie to the
 defence's memory.
 
+### The bug the animation work found
+
+Chasing a complaint that nothing was animated turned up something much worse.
+The fixed-timestep loop read:
+
+```js
+let acc = dt, steps = 0;                     // leftover discarded every frame
+while (acc >= H && steps < 6) { step(H); acc -= H; }
+```
+
+At exactly 60Hz that runs one step a frame and looks correct. At **120Hz `dt` is
+0.0083, never reaches the 0.0167 threshold, and the loop body never executes** —
+you snap the ball and nothing moves, forever. Every iPhone Pro has a 120Hz
+display. It also silently ate any throw made on a frame too short to contain a
+step, which is how it surfaced: a probe kept setting `throwTo` and the
+quarterback kept not throwing.
+
+The accumulator now carries across frames, is clamped so a stall cannot cause a
+burst, and a one-shot input is only cleared once a step has actually consumed it.
+
+### Animation
+
+Every figure carries a small bag of numbers — where each hand is, how far he is
+leaning, how much of him is "running" — and each frame those are eased toward
+what the pose wants rather than snapped to it. That one change is the difference
+between a set of poses and an animation: a man who is tackled falls over rather
+than appearing on his back, and a man standing still is still breathing.
+
+Two things that had to be got right:
+
+- **A timed motion is driven, not eased toward.** The throw is a sweep from rest
+  to fully cocked to follow-through. Running it through the same lerp as
+  everything else damped a third of a second of throwing motion into a shrug.
+  Easing is for transitions *between* held poses.
+- **The throwing arm is the same arm throughout.** The first version cocked the
+  back arm and extended the front one, which would have needed the ball to
+  change hands halfway through.
+
+The run has a scissoring stride with knee lift on the leading leg only, a body
+that rides up and down on it, arms swinging through an arc rather than sliding
+sideways, and shoulders counter-rotating against the hips — which is most of
+what sells a run at any size. Receivers reach at where the ball actually is, not
+at a fixed catch pose.
+
 ### Throwing, and what it looks like
 
 The ball is thrown at a **point**, not at a man, and leading a receiver is the

@@ -213,7 +213,8 @@ const CFG = {
   scatterBase: 1.4,
   scatterPressure: 2.4,
   pressureR: 2.0,
-  throwWind: 0.16,
+  throwWind: 0.22,
+  followTime: 0.3,      // how long the follow-through plays after release
   maxThrow: 60,          // yards, cursor reach from the quarterback
   carrierAvoid: 6,       // yards a runner "feels" traffic inside
   ballMagnet: 6.5,       // how far a man will break off to go and get a throw
@@ -1939,8 +1940,10 @@ function makePlay(o) {
    attack toward y = 10. Nothing mirrors, so "the ball is on the 35"
    means the same thing to the renderer, the rules and the drive sim.
    =================================================================== */
+const H_STEP = 1 / 60;          // the one true simulation tick
 const G = {
   st: null,
+  acc: 0,                       // leftover time between simulation ticks
   play: null,          // live PlaySimulation
   banner: null,
   bannerT: 0,
@@ -1996,6 +1999,7 @@ function newGame(myAb, oppAb, opts = {}) {
 function say(text, secs = 1.4, tone = "flood") {
   G.banner = { text, tone };
   G.bannerT = secs;
+  G.bannerFor = secs;
 }
 
 /* ---- spotting ---------------------------------------------------- */
@@ -2715,6 +2719,7 @@ function reCall(play) {
 
 function buildSnap(play) {
   const s = G.st;
+  G.acc = 0;
   fxReset();
   G.play = makePlay({
     play, scheme: s.scheme,
@@ -3013,7 +3018,7 @@ function fxUpdate(dt, sim) {
   if (!sim) { FX.trail.length = 0; FX.prevBall = "dead"; return; }
 
   // The follow-through starts on the frame the ball leaves his hand.
-  if (sim.threw && !FX.prevThrew) FX.throwPose = 0.22;
+  if (sim.threw && !FX.prevThrew) FX.throwPose = CFG.followTime;
   FX.prevThrew = sim.threw;
 
   const b = sim.ball;
@@ -3122,91 +3127,179 @@ function blob(x, y, r, col, edge = 0.8) {
   ctx.fillStyle = col; ctx.fill();
 }
 
+/* ---- the animation layer -----------------------------------------
+   Every figure carries a small bag of numbers — where his hands are,
+   how far he is leaning, how much of him is "running" — and every
+   frame those numbers are eased toward what the current pose wants
+   rather than snapped to it. That single change is the difference
+   between a set of poses and an animation: a man who starts to throw
+   winds up through the motion, a man who is tackled falls over rather
+   than appearing on his back, and a man standing still is still
+   breathing.
+
+   Hand positions are in FORWARD-SPACE — +x is the way he is facing —
+   so no pose has to know which way he is pointed.
+   ------------------------------------------------------------------ */
+const EASE = (a, b, t) => a + (b - a) * t;
+const smooth = t => t * t * (3 - 2 * t);
+const approach = (cur, tgt, per, dt) => cur + (tgt - cur) * (1 - Math.pow(per, dt));
+
+// Rest, fully cocked, and follow-through, as [frontX, frontY, backX, backY].
+// The FRONT arm is the throwing arm all the way through — the first version
+// cocked the back arm and extended the front one, which would have required the
+// ball to change hands halfway through the motion.
+const THROW_REST = [1.5, 3.2, -1.5, 3.2];
+const THROW_COCK = [-3.0, -5.2, 3.0, 0.6];
+const THROW_THRU = [6.6, -1.6, -3.2, 2.6];
+
+function animateFigure(p, pose, dt, sim, reach) {
+  const a = p._an || (p._an = {
+    fx: 1.5, fy: 3.2, bx: -1.5, by: 3.2,
+    lean: 0, crouch: 0, run: 0, fall: 0, clock: Math.random() * 6,
+  });
+  a.clock += dt;
+
+  let fx = 1.5, fy = 3.2, bx = -1.5, by = 3.2, lean = 0, crouch = 0;
+
+  // The throw, as one motion. `u` runs 0..1 through the wind-up and 1..2
+  // through the release; outside that it is -1 and he is doing something else.
+  let u = -1;
+  if (p.idx === 0 && p.side === "off" && !sim.turnover) {
+    if (sim.windup >= 0) u = clamp(1 - sim.windup / CFG.throwWind, 0, 1);
+    else if (FX.throwPose > 0) u = clamp(2 - FX.throwPose / CFG.followTime, 1, 2);
+  }
+
+  if (u >= 0) {
+    const from = u <= 1 ? THROW_REST : THROW_COCK;
+    const to = u <= 1 ? THROW_COCK : THROW_THRU;
+    const e = smooth(u <= 1 ? u : u - 1);
+    fx = EASE(from[0], to[0], e); fy = EASE(from[1], to[1], e);
+    bx = EASE(from[2], to[2], e); by = EASE(from[3], to[3], e);
+    lean = u <= 1 ? -0.4 * e : EASE(-0.4, 1.2, e);
+    // A timed motion is driven, not eased toward. Running the sweep through the
+    // same lerp as everything else damped a third of a second of throwing
+    // motion into a man shrugging — the easing is for transitions BETWEEN held
+    // poses, not for a pose that is already moving.
+    a.fx = fx; a.fy = fy; a.bx = bx; a.by = by;
+    a.lean = approach(a.lean, lean, 0.004, dt);
+    a.run = approach(a.run, 0, 0.0005, dt);
+    a.crouch = approach(a.crouch, 0, 0.02, dt);
+    a.fall = approach(a.fall, 0, 0.02, dt);
+    return a;
+  }
+  if (pose === "catch") {
+    // Both hands go to the ball, wherever it actually is.
+    fx = 3.2; fy = -4.4; bx = 2.0; by = -3.8;
+    if (reach) { fx = reach.x + 0.8; fy = reach.y; bx = reach.x - 1.0; by = reach.y + 0.9; }
+    lean = 0.3;
+  } else if (pose === "tackle") {
+    fx = 5.4; fy = -0.6; bx = 5.0; by = 1.4; lean = 1.5; crouch = 1.2;
+  } else if (pose === "block") {
+    fx = 4.9; fy = -0.2; bx = 4.5; by = 1.3; lean = 1.0; crouch = 1.6;
+  } else if (pose === "run") {
+    // Arms drive: they swing through a real arc rather than sliding sideways,
+    // and they rise as they come forward.
+    const sw = Math.sin(p._stride * 4.4);
+    fx = sw * 4.2; fy = 2.2 - Math.max(0, sw) * 2.4;
+    bx = -sw * 4.2; by = 2.2 - Math.max(0, -sw) * 2.4;
+    lean = 0.9;
+  } else if (pose === "stumble") {
+    // Caught off balance: arms out, weight back.
+    fx = 3.4; fy = -2.6; bx = -4.2; by = -1.4; lean = -1.1; crouch = 0.8;
+  } else {
+    // Standing is not the same as frozen: he shifts his weight.
+    const b = Math.sin(a.clock * 1.6) * 0.35;
+    fx = 1.5 + b * 0.3; fy = 3.2 + b; bx = -1.5 - b * 0.3; by = 3.2 - b;
+  }
+
+  // Hands move quickly, the body settles slowly, and the run blend has to be
+  // quick enough that the leg swing is not damped into a shuffle.
+  a.fx = approach(a.fx, fx, 0.0002, dt); a.fy = approach(a.fy, fy, 0.0002, dt);
+  a.bx = approach(a.bx, bx, 0.0002, dt); a.by = approach(a.by, by, 0.0002, dt);
+  a.lean = approach(a.lean, lean, 0.02, dt);
+  a.crouch = approach(a.crouch, crouch, 0.02, dt);
+  a.run = approach(a.run, pose === "run" ? 1 : 0, 0.0005, dt);
+  // Going down takes a moment, and he keeps a little momentum into the turf.
+  a.fall = approach(a.fall, pose === "down" ? 1 : 0, pose === "down" ? 0.00002 : 0.02, dt);
+  return a;
+}
+
 function drawFigure(p, team, pose, cx, cy, faceLeft, phase, holding) {
   const b = BUILD[p.pos] || BUILD.QB;
   const f = faceLeft ? -1 : 1;
+  const a = p._an || { fx: 1.5, fy: 3.2, bx: -1.5, by: 3.2, lean: 0, crouch: 0, run: 0, fall: 0, clock: 0 };
 
   ctx.save();
   ctx.translate(D(cx), D(cy));
   ctx.scale(UNIT * b.w, UNIT * b.h);
-  if (pose === "down") { ctx.rotate(f * 1.4); ctx.translate(f * 3.5, 4); }
 
-  const jersey = team.jersey, pants = team.pants, helmet = team.helmet, trim = team.trim;
-  // Proportions matter more than detail at this size. The first attempt made
-  // the head as wide as the shoulders and the torso a single fat pill, and the
-  // result read as an egg with legs. A football player is legs, then a narrow
-  // waist, then a very wide shoulder line, then a small head — the pads are
-  // the whole silhouette, so they are the widest thing on him.
-  const hipY = -6.6, padY = -12.3, headY = -15.6;
-  const span = b.pad;
-
-  // ---- legs ------------------------------------------------------------
-  let la, lb, lift = 0;
-  if (pose === "run") { la = Math.sin(phase) * 3.6; lb = -la; lift = Math.abs(Math.sin(phase)) * 1.5; }
-  else if (pose === "block" || pose === "tackle") { la = f * 3.0; lb = -f * 2.4; }
-  else { la = 1.7; lb = -1.7; }
-  limb(0, hipY, f * lb, -0.5, 2.6, pants);
-  limb(0, hipY, f * la, -0.5 - lift, 2.6, pants);
-  blob(f * lb, -0.4, 0.85, "#15181C", 0.35);
-  blob(f * la, -0.4 - lift, 0.85, "#15181C", 0.35);
-
-  // ---- torso, waist to collar -----------------------------------------
-  const leanX = pose === "tackle" ? f * 2.2 : pose === "block" ? f * 1.5
-              : pose === "run" ? f * 1.0 : 0;
-  limb(0, hipY + 0.4, leanX * 0.8, padY + 1.2, 4.6, jersey);
-
-  // ---- the pads --------------------------------------------------------
-  // One wide horizontal capsule. This is the thing that makes him read as a
-  // footballer rather than a man, and how a lineman reads as a lineman.
-  limb(leanX * 0.8 - span, padY, leanX * 0.8 + span, padY, 3.6, jersey);
-  // A trim band across them, the one club colour visible at this size.
-  limb(leanX * 0.8 - span * 0.62, padY - 1.1, leanX * 0.8 + span * 0.62, padY - 1.1, 1.0, trim, 0);
-
-  // ---- arms ------------------------------------------------------------
-  const sx = leanX * 0.8 + f * span * 0.72, sy = padY + 0.9;
-  const arm = (ex, ey) => {
-    limb(sx, sy, ex, ey, 2.1, jersey);
-    blob(ex, ey, 1.05, SKIN, 0.45);
-  };
-  const back = leanX * 0.8 - f * span * 0.72;
-  const armBack = (ex, ey) => {
-    limb(back, sy, ex, ey, 2.1, jersey);
-    blob(ex, ey, 1.05, SKIN, 0.45);
-  };
-  if (pose === "throwIt") {
-    armBack(back - f * 4.4, sy - 4.6);
-    arm(sx + f * 2.6, sy + 1.2);
-  } else if (pose === "release") {
-    arm(sx + f * 5.4, sy - 2.2);
-    armBack(back - f * 1.6, sy + 2.6);
-  } else if (pose === "catch") {
-    arm(sx + f * 3.0, sy - 4.8);
-    armBack(back + f * 3.6, sy - 4.2);
-  } else if (pose === "tackle" || pose === "block") {
-    arm(sx + f * 4.8, sy - 0.6);
-    armBack(back + f * 5.4, sy + 1.0);
-  } else if (pose === "run") {
-    arm(sx + f * Math.sin(phase) * 3.0, sy + 2.6);
-    armBack(back - f * Math.sin(phase) * 3.0, sy + 2.2);
-  } else {
-    arm(sx + f * 1.2, sy + 3.4);
-    armBack(back - f * 1.2, sy + 3.4);
+  // He tips over rather than teleporting onto his back, and overshoots a touch
+  // on the way down so it lands rather than arrives.
+  if (a.fall > 0.002) {
+    const e = smooth(clamp(a.fall, 0, 1));
+    const over = Math.sin(clamp(a.fall, 0, 1) * Math.PI) * 0.18;
+    ctx.rotate(f * (1.42 * e + over));
+    ctx.translate(f * 3.6 * e, 4.2 * e);
   }
 
+  const jersey = team.jersey, pants = team.pants, helmet = team.helmet, trim = team.trim;
+  const hipY = -6.6 + a.crouch * 0.9, padY = -12.3 + a.crouch * 1.5, headY = -15.6 + a.crouch * 1.7;
+  const span = b.pad;
+  // A running man rides up and down on his stride; a standing one breathes.
+  const bob = a.run > 0.05 ? -Math.abs(Math.sin(phase)) * 1.15 * a.run
+                           : Math.sin(a.clock * 1.6) * 0.22;
+
+  // ---- legs ------------------------------------------------------------
+  const swing = Math.sin(phase) * 4.5;
+  const stanceA = pose === "block" || pose === "tackle" ? f * 3.0 : 1.7;
+  const stanceB = pose === "block" || pose === "tackle" ? -f * 2.4 : -1.7;
+  const la = EASE(stanceA, f * swing, a.run);
+  const lb = EASE(stanceB, -f * swing, a.run);
+  // Knee lift on the leading leg only, so the stride scissors rather than both
+  // feet hopping together.
+  const lift = Math.max(0, Math.sin(phase)) * 2.4 * a.run;
+  limb(0, hipY + bob, lb, -0.5, 2.6, pants);
+  limb(0, hipY + bob, la, -0.5 - lift, 2.6, pants);
+  blob(lb, -0.4, 0.85, "#15181C", 0.35);
+  blob(la, -0.4 - lift, 0.85, "#15181C", 0.35);
+
+  // ---- torso -----------------------------------------------------------
+  const leanX = f * a.lean * 1.6;
+  limb(0, hipY + 0.4 + bob, leanX * 0.8, padY + 1.2 + bob, 4.6, jersey);
+  // Shoulders counter-rotate against the hips on every stride, which is most
+  // of what sells a run at any size.
+  const twist = Math.sin(phase) * 1.5 * a.run;
+
+  // ---- the pads --------------------------------------------------------
+  const px0 = leanX * 0.8, py0 = padY + bob;
+  limb(px0 - span, py0 + twist, px0 + span, py0 - twist, 3.6, jersey);
+  limb(px0 - span * 0.62, py0 - 1.1 + twist * 0.6, px0 + span * 0.62, py0 - 1.1 - twist * 0.6,
+       1.0, trim, 0);
+
+  // ---- arms ------------------------------------------------------------
+  // Hands are stored in forward-space, so `f` is applied here and nowhere else.
+  const shF = px0 + f * span * 0.72, shB = px0 - f * span * 0.72;
+  const shY = py0 + 0.9, shYF = shY - twist * f, shYB = shY + twist * f;
+  const hand = (sx, sy, hx, hy) => {
+    limb(sx, sy, sx + f * hx, sy + hy, 2.1, jersey);
+    blob(sx + f * hx, sy + hy, 1.05, SKIN, 0.45);
+  };
+  hand(shB, shYB, a.bx, a.by);
+  hand(shF, shYF, a.fx, a.fy);
+
   // ---- helmet ----------------------------------------------------------
-  const hx = leanX * 1.1 + f * 0.5;
-  blob(hx, headY, 2.35, helmet, 0.75);
-  // A stripe over the crown and a facemask in front: two marks, and suddenly
-  // he is facing a direction.
+  const hx = leanX * 1.1 + f * 0.5, hy = headY + bob * 0.55;
+  blob(hx, hy, 2.35, helmet, 0.75);
   ctx.save();
-  ctx.beginPath(); ctx.arc(hx, headY, 2.35, 0, Math.PI * 2); ctx.clip();
-  limb(hx - 2.6, headY - 1.4, hx + 2.6, headY - 1.4, 0.9, trim, 0);
+  ctx.beginPath(); ctx.arc(hx, hy, 2.35, 0, Math.PI * 2); ctx.clip();
+  limb(hx - 2.6, hy - 1.4, hx + 2.6, hy - 1.4, 0.9, trim, 0);
   ctx.restore();
-  limb(hx + f * 1.9, headY + 0.5, hx + f * 2.5, headY + 1.5, 0.85, "#C9CEDA", 0.6);
+  limb(hx + f * 1.9, hy + 0.5, hx + f * 2.5, hy + 1.5, 0.85, "#C9CEDA", 0.6);
 
   if (holding) {
+    // Tucked under the front arm, and it goes where that arm goes.
     ctx.save();
-    ctx.translate(sx + f * 1.8, sy + 2.4);
+    ctx.translate(shF + f * a.fx * 0.45, shYF + a.fy * 0.45 + 1.2);
     ctx.rotate(f * -0.55);
     ctx.beginPath(); ctx.ellipse(0, 0, 2.3, 1.4, 0, 0, Math.PI * 2);
     ctx.fillStyle = EDGE; ctx.fill();
@@ -3282,6 +3375,7 @@ function drawPlayers(dt) {
     else if (following) frame = "release";
     else if (posing) frame = "catch";
     else if (lunging) frame = "tackle";
+    else if (p.mot === "stumble") frame = "stumble";
     else if (p.mot === "engaged") frame = "block";
     else if (speed < 0.6) frame = "stand";
     else frame = "run";
@@ -3311,6 +3405,15 @@ function drawPlayers(dt) {
     ctx.restore();
 
     const holding = p.hasBall && p.mot !== "down" && frame !== "throwIt" && frame !== "release";
+    // A man reaching for a catch reaches at the ball, not at a fixed pose.
+    let reach = null;
+    if (frame === "catch" && sim.ball.state === "air") {
+      const rx = (scrX(sim.ball.y) - cxA) * (faceLeft ? -1 : 1);
+      const ry = scrY(sim.ball.x) - sim.ball.h * PPY * 0.9 - (cyA - 12);
+      const len = Math.hypot(rx, ry) || 1, cap = Math.min(len, 6.5) / len;
+      reach = { x: rx * cap, y: ry * cap };
+    }
+    animateFigure(p, frame, dt, sim, reach);
     drawFigure(p, team, frame, cxA, cyA, faceLeft, p._stride * 4.4, holding);
   }
 
@@ -3447,8 +3550,17 @@ function drawBanner() {
   const col = t.tone === "good" ? COL.good : t.tone === "bad" ? COL.bad : COL.flood;
   const w = textW(t.text) * 2 + 18;
   const y = Math.round(VIEWTOP + VIEWH * 0.16);
-  panel(ARTW / 2 - w / 2, y, w, 22, COL.night, col);
-  text(t.text, ARTW / 2, y + 7, { scale: 2, color: col });
+  // It drops in and settles, and slides back out at the end, rather than
+  // blinking on and off between one frame and the next.
+  const age = (G.bannerFor || 1) - G.bannerT;
+  const inT = clamp(age / 0.16, 0, 1);
+  const outT = clamp(G.bannerT / 0.22, 0, 1);
+  const drop = (1 - smooth(inT)) * -14 + (1 - smooth(outT)) * -8;
+  ctx.save();
+  ctx.globalAlpha = Math.min(smooth(inT), smooth(outT));
+  panel(ARTW / 2 - w / 2, y + drop, w, 22, COL.night, col);
+  text(t.text, ARTW / 2, y + drop + 7, { scale: 2, color: col });
+  ctx.restore();
 }
 
 function drawRotatePrompt() {
@@ -4447,21 +4559,29 @@ function update(dt) {
   Input.snap = false;
 
   if (s.phase === "live" && G.play) {
-    const inp = {
-      snap: false,
-      steerX: Input.steerX, steerY: Input.steerY, sprint: Input.sprint,
-      throwTo: Input.throwTo, tuck: Input.tuck, aiming: !!Input.aim,
-    };
-    Input.throwTo = null; Input.tuck = false;
-
     // Fixed timestep: the simulation is only reproducible if it is always
     // advanced by the same amount, whatever the display is doing.
-    let acc = dt, steps = 0;
-    const H = 1 / 60;
-    while (acc >= H && steps < 6 && !G.play.over) {
-      G.play.step(H, steps === 0 ? inp
-        : { steerX: inp.steerX, steerY: inp.steerY, sprint: inp.sprint, aiming: inp.aiming });
-      acc -= H; steps++;
+    //
+    // The leftover used to be discarded — `acc` was re-seeded from `dt` every
+    // frame — which is fine at exactly 60Hz and catastrophic anywhere else. On
+    // a 120Hz display `dt` is 0.0083, never reaches the 0.0167 threshold, and
+    // the play simply never advances: you snap the ball and nothing moves.
+    // Every iPhone Pro has a 120Hz display.
+    G.acc = Math.min((G.acc || 0) + dt, H_STEP * 8);
+    let steps = 0;
+    while (G.acc >= H_STEP && steps < 6 && !G.play.over) {
+      const first = steps === 0;
+      G.play.step(H_STEP, {
+        snap: false,
+        steerX: Input.steerX, steerY: Input.steerY, sprint: Input.sprint,
+        aiming: !!Input.aim,
+        // A one-shot input belongs to the first substep, and must not be
+        // thrown away on a frame that was too short to contain one.
+        throwTo: first ? Input.throwTo : null,
+        tuck: first ? Input.tuck : false,
+      });
+      if (first) { Input.throwTo = null; Input.tuck = false; }
+      G.acc -= H_STEP; steps++;
     }
     if (G.play.over) {
       s.phase = "result";
