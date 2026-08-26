@@ -218,7 +218,7 @@ const CFG = {
   throwWind: 0.16,
   maxThrow: 60,          // yards, cursor reach from the quarterback
   carrierAvoid: 6,       // yards a runner "feels" traffic inside
-  ballMagnet: 11,        // how far a man will break off to go and get a throw
+  ballMagnet: 6.5,       // how far a man will break off to go and get a throw
   pursueLead: 1.5,       // seconds of intercept lead a defender may aim at
   // How long it takes to diagnose a run: the box reacts almost at once, the
   // secondary has to respect the pass first.
@@ -1266,13 +1266,16 @@ function makePlay(o) {
     let t = 0;
     for (let i = 0; i < 3; i++) t = Math.hypot(rx + c.vx * t, ry + c.vy * t) / Math.max(1, sp);
     t = Math.min(t, CFG.pursueLead) * react;
-    setWant(p, rx + c.vx * t, ry + c.vy * t);
-    // Chase him flat out. `sprint` was only ever set by `carrierAI` and by the
-    // thumb, so every ball carrier in the game was permanently 14% faster than
-    // every man pursuing him AND nine points harder to bring down — which is
-    // why a back who cleared the front was simply never caught, and why a dive
-    // averaged twenty yards against an empty box.
+    // Chase him flat out — and set this BEFORE asking for the want vector,
+    // because `setWant` sizes it with `speedOf`, which reads this flag. Setting
+    // it afterwards left every pursuer asking for his jogging speed.
+    //
+    // `sprint` was only ever set by `carrierAI` and by the thumb, so every ball
+    // carrier in the game was permanently 14% faster than every man pursuing
+    // him AND nine points harder to bring down — which is why a back who
+    // cleared the front was simply never caught.
     p.sprint = true;
+    setWant(p, rx + c.vx * t, ry + c.vy * t);
   }
 
   function blockTarget(p, aimX, aimY) {
@@ -1415,13 +1418,26 @@ function makePlay(o) {
     void aiming;
   }
 
-  // Anyone eligible who is near where the ball is coming down goes and gets it.
+  // Anyone eligible who is near where the ball is coming down goes and gets it —
+  // but only if he is near it, and only if he could actually get there.
+  //
+  // This used to be a flat eleven yards with no regard for how long the ball
+  // had left in the air, which meant you never had to aim at anybody: drop the
+  // pass on the emptiest patch of grass you could find and a receiver would
+  // appear underneath it. You could play the whole game without once looking at
+  // the coverage. The radius is now a third of that, and capped by how far the
+  // man can physically run before the ball lands.
+  function reachRadius(p) {
+    const b = S.ball;
+    const left = Math.max(0, b.dur - b.tt);
+    return Math.min(CFG.ballMagnet, speedOf(p) * left + CFG.catchR);
+  }
+
   function breaksOnBall(p) {
     if (S.ball.state !== "air") return false;
     const j = p.job;
     if (j.t !== "route" && j.t !== "delay") return false;
-    const d = dist(p.x, p.y, S.ball.tx, S.ball.ty);
-    if (d > CFG.ballMagnet) return false;
+    if (dist(p.x, p.y, S.ball.tx, S.ball.ty) > reachRadius(p)) return false;
     setWant(p, S.ball.tx - p.x, S.ball.ty - p.y);
     return true;
   }
@@ -1500,10 +1516,10 @@ function makePlay(o) {
     if (j.t === "man") {
       const t = P[j.i];
       if (!t || t.mot === "down") return zoneAI(p, 0, 10, 10);
-      // The same radius the receiver gets. It used to be nine against his
-      // eleven, so a ball thrown at the grass between them was the receiver's
-      // by arithmetic before anybody ran a step.
-      if (S.ball.state === "air" && dist(S.ball.tx, S.ball.ty, p.x, p.y) < CFG.ballMagnet) {
+      // The same radius the receiver gets, on the same terms. It used to be nine
+      // against his eleven, so a ball thrown at the grass between them was the
+      // receiver's by arithmetic before anybody ran a step.
+      if (S.ball.state === "air" && dist(S.ball.tx, S.ball.ty, p.x, p.y) < reachRadius(p)) {
         setWant(p, S.ball.tx - p.x, S.ball.ty - p.y);
         return;
       }

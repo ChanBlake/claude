@@ -128,21 +128,26 @@ Per snap, sampled over a few thousand plays, against the real thing in brackets:
 | | Pixel Bowl | (NFL) |
 |---|---|---|
 | Yards per carry | 4.4 | 4.3 |
-| Yards per completion | 12.1 | 11.5 |
-| — of which after the catch | 4.6 | 5.0 |
-| Completions 35 yards or longer | 5% | 4% |
-| Completion rate | 68% | 65% |
-| Interception rate | 3.3% | 2.3% |
+| Yards per completion | 12.0 | 11.5 |
+| — of which after the catch | 5.9 | 5.0 |
+| Completions 35 yards or longer | 8% | 4% |
+| Completion rate | 60% | 65% |
+| Interception rate | 4.3% | 2.3% |
 
 Whole games, as **average margin** by how well the game is played (`tools/skill.js`,
 twelve games a cell — small enough that these move a few points run to run):
 
 | | ROOKIE | PRO | ALL-PRO |
 |---|---|---|---|
-| Ordinary | +12 | −5 | −2 |
-| Careful | +11 | +6 | −1 |
-| Sharp | +10 | +1 | −12 |
-| One play, over and over | +14 | 0 | −11 |
+| Ordinary | +2 | +4 | −8 |
+| Careful | +15 | +1 | −1 |
+| Sharp | −4 | −5 | −10 |
+| One play, over and over | +16 | 0 | −9 |
+
+("Sharp" holds the ball longer looking for a better throw, and does worse for it
+— in a game this compressed, holding it gets you sacked. That is a fact about
+the scripted player rather than about the game, and it is why the table has four
+rows instead of one.)
 
 The opponent's simulated possession is worth **1.5 / 1.8 / 2.6 points a drive**
 across the three grades, against a real-football 2.2 — which with seven or eight
@@ -232,7 +237,8 @@ never touch:
 3. **The ball magnet was one-sided.** A receiver breaks off his route for a throw
    in the air from eleven yards away; a defender in man coverage only broke on it
    from nine. A ball thrown at the grass between them was the receiver's by
-   arithmetic before anybody ran a step. Same radius for both now.
+   arithmetic before anybody ran a step. Same radius for both now — see below,
+   because eleven yards turned out to be the whole problem.
 
 4. A quarterback who ran out of bounds behind his own line was credited with a
    rush for minus nine rather than being sacked, which was most of the negative
@@ -242,6 +248,30 @@ The final screen now reports **TOUCHDOWNS** and **DRIVES BEGAN** — the average
 yard line your possessions started on. Between them and TOTAL YARDS, a scoreline
 is self-diagnosing: eight touchdowns from 192 yards means short fields, not a
 good passing day, and there was no way to see that from inside the game.
+
+### You never had to aim at anybody
+
+The playtest note was *"I can just throw the ball at the ground and it'll move
+up the field without even touching a player."* The rules were innocent — sixty
+throws at empty grass all came back incomplete, ball on the original spot. The
+fault was in the magnet: `breaksOnBall` let any route runner abandon his route
+for a ball in the air **eleven yards away**, with no regard for how long the ball
+had left to travel. So you never had to aim at a receiver. Drop it on the
+emptiest patch of turf you could find and one would appear underneath it.
+
+Measured as **yards per throw**, which is the number that decides whether a
+tactic is worth using:
+
+| | aiming at a receiver | aiming at empty grass |
+|---|---|---|
+| eleven-yard magnet | 8.88 | 8.74 |
+| six-and-a-half | 9.77 | 6.77 |
+
+At eleven the two are the same, so there was never a reason to look at the
+coverage at all — which is exactly the game the note describes. The radius is
+now 6.5 and capped by how far the man can physically run before the ball lands,
+so a receiver adjusts to a throw instead of teleporting to one. A properly led
+throw still completes 63%; a lazy one no longer completes at all.
 
 ### Two bugs that were control, not simulation
 

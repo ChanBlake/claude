@@ -38,8 +38,12 @@ function runPlay(play, scheme, seed, los) {
           const sc = open * 1.6 + (r.y - los) * 0.3;
           if (sc > bs) { bs = sc; best = r; }
         }
-        const flight = Math.hypot(best.x - qb.x, best.y - qb.y) / CFG.passSpeed;
-        inp.throwTo = { x: best.x + best.vx * flight, y: best.y + best.vy * flight };
+        // Solve for where he will be when the ball gets there, rather than
+        // guessing from where he is now — three passes converge.
+        let f = 0;
+        for (let k = 0; k < 3; k++)
+          f = Math.hypot(best.x + best.vx * f - qb.x, best.y + best.vy * f - qb.y) / CFG.passSpeed;
+        inp.throwTo = { x: best.x + best.vx * f, y: best.y + best.vy * f };
       }
     } else if (sim.ball.state !== "air") {
       const c = sim.P.find(p => p.hasBall);
