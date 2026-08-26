@@ -259,6 +259,7 @@ const CFG = {
   // Kicking.
   kickRangeMin: 36, kickRangeMax: 60,
   kickWindMax: 2.2,
+  kickSweep: 0.78,       // power-bar cycles per second
 
   // Clock. Live play burns game time faster than real time so a short
   // quarter still contains a real quarter's worth of snaps.
@@ -2836,10 +2837,10 @@ function resolveKick(aimX, power) {
   // Wind pushes the ball; a steadier kicker holds his line better.
   const steady = clamp(s.myRoster.k.r.awr / 99, 0.3, 1);
   const drift = k.wind * (k.dist / 40) * (1.7 - steady) * 1.6;
-  // Everything past the mark on the power bar buys distance with accuracy.
-  const slam = Math.max(0, power - 0.88) * 26;
-  let landX = aimX + drift;
-  landX += landX >= 0 ? slam : -slam;
+  // No hidden penalty for a big one. The bar says red or green and means it:
+  // red is short of the posts, green gets there. Where it ends up between
+  // them is your aim and the wind, which is the part you can actually read.
+  const landX = aimX + drift;
 
   const hasLeg = k.dist <= k.range * (0.58 + 0.46 * power);
   const good = hasLeg && Math.abs(landX) <= FIELD.uprightHalf;
@@ -3270,15 +3271,24 @@ function buildField() {
   band(0, FIELD.L, 0, 1, COL.chalk);
   band(0, FIELD.L, h - 1, 1, COL.chalk);
 
-  // Goalposts on both back lines.
+  // Goalposts on both back lines, drawn the same shape the kick screen draws
+  // them so they do not change when you line one up.
   for (const backY of [0, FIELD.L]) {
     const gx = X(backY);
-    const top = Y(FIELD.midY + FIELD.uprightHalf), bot = Y(FIELD.midY - FIELD.uprightHalf);
-    R(gx - 1, top, 2, bot - top, COL.chalk);
-    // The crossbar stubs point back into the field of play.
-    const stub = (backY === 0) === driveRight() ? 2 : -4;
-    R(gx + stub, top - 1, 4, 2, COL.goalpost || "#E8C63A");
-    R(gx + stub, bot - 1, 4, 2, COL.goalpost || "#E8C63A");
+    const a = Y(FIELD.midY + FIELD.uprightHalf), b = Y(FIELD.midY - FIELD.uprightHalf);
+    const top = Math.min(a, b), bot = Math.max(a, b);
+    // Into the field is away from whichever back line this is.
+    const inward = (backY === 0) === driveRight() ? 1 : -1;
+    const ARM = 11;
+    const bar = (x, y, w, h) => {
+      R(x - 1, y - 1, w + 2, h + 2, "#7A5D0E");
+      R(x, y, w, h, "#F2D53C");
+      R(x, y, w, 1, "#FFF4A0");
+    };
+    R(gx - inward * 2 + 2, top + 2, 4, bot - top, "rgba(0,0,0,.25)");
+    bar(gx - inward * 8, (top + bot) / 2 - 2, 8, 4);
+    bar(gx - 2, top, 4, bot - top);
+    for (const y of [top, bot]) bar(gx + (inward < 0 ? -ARM : 2), y - 2, ARM, 4);
   }
 }
 
@@ -3747,6 +3757,35 @@ function drawFigure(p, team, pose, cx, cy, faceLeft, phase, holding, fallSide) {
     ctx.restore();
   }
   ctx.restore();
+}
+
+/* ---- the posts -----------------------------------------------------
+   Seen from above and slightly behind, so the crossbar runs across the
+   screen and the uprights stand up out of it. `y0` and `y1` are the two
+   ends of the crossbar in screen rows.
+   ------------------------------------------------------------------ */
+const POST = "#F2D53C", POST_LIT = "#FFF4A0", POST_DARK = "#7A5D0E";
+function goalPost(gx, y0, y1) {
+  const top = Math.min(y0, y1), bot = Math.max(y0, y1);
+  // Which way is into the field of play. The uprights lean that way, which is
+  // what turns a bare vertical stroke into a goalpost you can read from
+  // above: drawn straight up out of the crossbar they merge with it and the
+  // whole thing looks like one yellow stick.
+  const inward = driveRight() ? -1 : 1;
+  const ARM = 11;                       // how far the uprights reach in
+  const bar = (x, y, w, h) => {
+    rect(x - 1, y - 1, w + 2, h + 2, POST_DARK);
+    rect(x, y, w, h, POST);
+    rect(x, y, w, 1, POST_LIT);
+  };
+  // Shadow first, offset away from the play.
+  rect(gx - inward * 2 + 2, top + 2, 4, bot - top, "rgba(0,0,0,.25)");
+  // The pole, running back out of the field behind the crossbar.
+  bar(gx - inward * 8, (top + bot) / 2 - 2, 8, 4);
+  // Crossbar.
+  bar(gx - 2, top, 4, bot - top);
+  // An upright off each end, reaching into the field.
+  for (const y of [top, bot]) bar(gx + (inward < 0 ? -ARM : 2), y - 2, ARM, 4);
 }
 
 // The ball in flight or on the floor.
@@ -4354,12 +4393,12 @@ function drawKick() {
                pl.side === "def" ? !driveRight() : driveRight(), k.t * 5 + pl.x);
   }
 
-  // Goalposts, drawn on top of the field so they read against the crowd.
+  // Goalposts. You are aiming at these, so they are the one thing on the
+  // screen allowed to be loud: a shadow on the grass under them, a dark
+  // outline so they hold against turf, and a lit edge up each upright.
   const gx = scrX(postsY);
   const upY0 = scrY(FIELD.midY + FIELD.uprightHalf), upY1 = scrY(FIELD.midY - FIELD.uprightHalf);
-  rect(gx - 1, upY0, 2, upY1 - upY0, COL.chalk);
-  rect(gx - 1, upY0 - 16, 2, 17, COL.flood);
-  rect(gx - 1, upY1 - 1, 2, 17, COL.flood);
+  goalPost(gx, upY0, upY1);
 
   // The ball, in hand or in flight.
   if (!k.flight) {
@@ -4374,50 +4413,78 @@ function drawKick() {
     if (t >= 1) {
       const label = f.good ? "GOOD" : (f.hasLeg ? "WIDE" : "SHORT");
       const w = textW(label) * 3 + 20;
-      panel(ARTW / 2 - w / 2, VIEWTOP + 14, w, 30, COL.night,
-            f.good ? COL.good : COL.bad);
-      text(label, ARTW / 2, VIEWTOP + 24, { scale: 3, color: f.good ? COL.good : COL.bad });
+      const ly = VIEWTOP + 48;
+      panel(ARTW / 2 - w / 2, ly, w, 30, COL.night, f.good ? COL.good : COL.bad);
+      text(label, ARTW / 2, ly + 10, { scale: 3, color: f.good ? COL.good : COL.bad });
     }
   }
 
-  // Compact readout, top-left so it never covers the posts.
-  const pw = 116, ph = 34;
-  panel(8, VIEWTOP + 6, pw, ph, COL.night2, COL.edge);
-  text(k.kind === "xp" ? "EXTRA POINT" : Math.round(k.dist) + " YARDS",
-       8 + pw / 2, VIEWTOP + 10, { scale: 2, color: COL.flood });
-  const w = k.wind;
-  const arrow = w > 0.15 ? "▲" : w < -0.15 ? "▼" : "·";
-  text("WIND " + arrow + " " + Math.abs(w).toFixed(1), 8 + pw / 2, VIEWTOP + 27,
-       { color: Math.abs(w) > 1.1 ? COL.bad : COL.dim });
-
-  if (k.flight) return;
+  if (k.flight) { drawKickMeter(k); return; }
 
   if (Input.down) {
-    const back = Math.max(0, Input.x - Input.sx);       // pull away from the posts
     const across = -(Input.y - Input.sy);               // up on screen aims high
-    k.power = clamp(back / 58, 0, 1);
     k.aimX = clamp(across / 11, -7, 7);
-    // Preview, on the field, from the tee toward the posts.
-    for (let i = 1; i <= 16; i++) {
-      const t = i / 16;
+    // Preview, on the field, from the tee toward the posts — the same
+    // marching squares the throw uses, so aiming a kick reads like aiming a
+    // pass rather than like a different game.
+    const steps = 34;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
       const fy = lerp(k.spotY, postsY, t);
       const fx = lerp(k.spotX, FIELD.midY + k.aimX, t);
-      const lift = Math.sin(t * Math.PI) * 9 * k.power;
+      const lift = Math.sin(t * Math.PI) * 9 * Math.max(k.power, 0.25);
       const px = scrX(fy), py = scrY(fx) - lift * PPY * 0.5;
-      rect(px - 1.5, py - 1.5, 3, 3, COL.ink);
-      rect(px - 1, py - 1, 2, 2, k.power > 0.9 ? COL.bad : COL.flood);
+      const size = 2 + Math.round(t * 1.4);
+      rect(px - size / 2 - 1, py - size / 2 - 1, size + 2, size + 2, COL.ink);
+      rect(px - size / 2, py - size / 2, size, size, COL.flood);
     }
-    const bw = 150, mx = Math.round(ARTW / 2 - bw / 2), my = ARTH - 26;
-    panel(mx, my, bw, 9, COL.night, COL.edge);
-    rect(mx + 1, my + 1, (bw - 2) * k.power, 7, k.power > 0.9 ? COL.bad : COL.flood);
-    // A mark at the point where extra power starts costing accuracy.
-    rect(mx + Math.round(bw * 0.88), my - 2, 1, 13, COL.chalk);
-    const lab = k.power > 0.9 ? "TOO MUCH" : "RELEASE";
-    text(lab, ARTW / 2, my - 11, { color: k.power > 0.9 ? COL.bad : COL.ink });
-  } else {
-    const hint = "PULL BACK, THEN RELEASE  ·  UP AND DOWN TO AIM";
+  }
+
+  drawKickMeter(k);
+  if (!Input.down) {
+    const hint = "DRAG UP AND DOWN TO AIM  ·  LET GO IN THE GREEN";
     pill(Math.round(ARTW / 2 - (textW(hint) + 10) / 2), ARTH - 16, hint, COL.ink);
   }
+}
+
+/* ---- the power bar -------------------------------------------------
+   Two colours, and they are the truth: red is not enough boot to reach
+   the posts from here, green is. The boundary is worked back out of the
+   same sum the kick is resolved with, so a fifty-yarder really does show
+   you a sliver of green and a chip shot really is nearly all green.
+   ------------------------------------------------------------------ */
+function drawKickMeter(k) {
+  const need = clamp((k.dist / k.range - 0.58) / 0.46, 0, 1);
+  const bw = Math.min(310, Math.round(ARTW * 0.64)), bh = 14, rowH = 11;
+  const mx = Math.round(ARTW / 2 - bw / 2), my = VIEWTOP + 6;
+  const at = f => Math.round((bw - 4) * clamp(f, 0, 1));
+
+  // One box holds the bar AND the readout, because anything written straight
+  // onto grass disappears the moment it crosses a yard number.
+  panel(mx, my, bw, bh + rowH + 3, "#080B0E", COL.edge);
+  const bx = mx + 2, by = my + 2, bwi = bw - 4;
+  rect(bx, by, at(need), bh - 2, "#C4302A");
+  rect(bx + at(need), by, bwi - at(need), bh - 2, "#37B94A");
+  // A lit top edge and a shadowed floor, so the bar has some depth to it.
+  rect(bx, by, bwi, 1, "rgba(255,255,255,.30)");
+  rect(bx, by + bh - 4, bwi, 2, "rgba(0,0,0,.30)");
+
+  // Where the sweep is now.
+  const px = bx + at(k.power);
+  rect(px - 2, by - 2, 4, bh + 2, "#0B0F13");
+  rect(px - 1, by - 1, 2, bh, COL.chalk);
+
+  const reaches = k.power >= need;
+  const ry = my + bh + 2;
+  text(k.kind === "xp" ? "EXTRA POINT" : Math.round(k.dist) + " YARDS",
+       mx + 5, ry, { align: -1, color: COL.ink, shadow: false });
+  const w = k.wind;
+  const arrow = w > 0.15 ? "▲" : w < -0.15 ? "▼" : "·";
+  text("WIND " + arrow + " " + Math.abs(w).toFixed(1), mx + bw - 5, ry,
+       { align: 1, color: Math.abs(w) > 1.1 ? COL.bad : COL.dim, shadow: false });
+  if (!k.flight)
+    text(reaches ? "LET GO" : "NOT ENOUGH", ARTW / 2, ry,
+         { color: reaches ? COL.good : COL.bad, shadow: false });
 }
 
 /* ---- their drive --------------------------------------------------- */
@@ -5396,6 +5463,13 @@ function update(dt) {
     const k = s.kick;
     // Creep the rush in, purely for the look of it — you cannot be blocked.
     k.t += dt;
+    // The power bar sweeps on its own and you let go when it is where you
+    // want it. Pulling a distance out of a drag gave you all the time in the
+    // world to get it exactly right, which is not a kick.
+    if (!k.flight) {
+      const cycle = (k.t * CFG.kickSweep) % 2;
+      k.power = 1 - Math.abs(1 - cycle);
+    }
     for (const pl of k.players)
       if (pl.role === "rush") pl.y = pl.y0 - Math.min(1.4, k.t * 1.2);
 
