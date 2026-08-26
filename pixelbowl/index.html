@@ -63,8 +63,6 @@ html, body {
 
 #screen {
   display: block;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
   touch-action: none;
   background: #000;
   /* A phone-shaped play surface on desktop, full bleed on a phone. */
@@ -236,6 +234,9 @@ const CFG = {
   carrierAvoid: 6,       // yards a runner "feels" traffic inside
   ballMagnet: 6.5,       // how far a man will break off to go and get a throw
   pursueLead: 1.5,       // seconds of intercept lead a defender may aim at
+  // Press coverage: how long the jam lasts, how close he has to be to land it,
+  // and how long it stays with the receiver.
+  pressTime: 0.85, pressReach: 1.6, pressSlow: 0.18,
   // How long it takes to diagnose a run: the box reacts almost at once, the
   // secondary has to respect the pass first.
   runReadFront: 0.2, runReadDeep: 0.45,
@@ -367,171 +368,16 @@ const accelOf  = r => scaled(r.acc, CFG.accelMin, CFG.accelMax);
 const turnOf   = r => scaled(r.agi, CFG.turnMin, CFG.turnMax);
 
 /* ===================================================================
-   FONT — a 5x7 bitmap face. Every character the game prints goes
-   through it, so the interface sits on the same pixel grid as the play.
+   TYPE METRICS — the grid the whole interface is laid out on.
+
+   Every panel, button and column in this game is positioned in units of
+   six across and seven down: one character. That grid outlived the
+   5x7 bitmap face it came from, because the typeface that replaced it
+   is monospaced and sized to advance exactly six units. Nothing in any
+   layout had to move.
    =================================================================== */
-const GLYPHS = {
-  A:".###.,#...#,#...#,#####,#...#,#...#,#...#", B:"####.,#...#,#...#,####.,#...#,#...#,####.",
-  C:".###.,#...#,#....,#....,#....,#...#,.###.", D:"####.,#...#,#...#,#...#,#...#,#...#,####.",
-  E:"#####,#....,#....,####.,#....,#....,#####", F:"#####,#....,#....,####.,#....,#....,#....",
-  G:".###.,#...#,#....,#.###,#...#,#...#,.###.", H:"#...#,#...#,#...#,#####,#...#,#...#,#...#",
-  I:".###.,..#..,..#..,..#..,..#..,..#..,.###.", J:"..###,...#.,...#.,...#.,...#.,#..#.,.##..",
-  K:"#...#,#..#.,#.#..,##...,#.#..,#..#.,#...#", L:"#....,#....,#....,#....,#....,#....,#####",
-  M:"#...#,##.##,#.#.#,#...#,#...#,#...#,#...#", N:"#...#,##..#,#.#.#,#..##,#...#,#...#,#...#",
-  O:".###.,#...#,#...#,#...#,#...#,#...#,.###.", P:"####.,#...#,#...#,####.,#....,#....,#....",
-  Q:".###.,#...#,#...#,#...#,#.#.#,#..#.,.##.#", R:"####.,#...#,#...#,####.,#.#..,#..#.,#...#",
-  S:".####,#....,#....,.###.,....#,....#,####.", T:"#####,..#..,..#..,..#..,..#..,..#..,..#..",
-  U:"#...#,#...#,#...#,#...#,#...#,#...#,.###.", V:"#...#,#...#,#...#,#...#,#...#,.#.#.,..#..",
-  W:"#...#,#...#,#...#,#.#.#,#.#.#,##.##,#...#", X:"#...#,#...#,.#.#.,..#..,.#.#.,#...#,#...#",
-  Y:"#...#,#...#,.#.#.,..#..,..#..,..#..,..#..", Z:"#####,....#,...#.,..#..,.#...,#....,#####",
-  "0":".###.,#...#,#..##,#.#.#,##..#,#...#,.###.", "1":"..#..,.##..,..#..,..#..,..#..,..#..,.###.",
-  "2":".###.,#...#,....#,...#.,..#..,.#...,#####", "3":"#####,...#.,..#..,...#.,....#,#...#,.###.",
-  "4":"...#.,..##.,.#.#.,#..#.,#####,...#.,...#.", "5":"#####,#....,####.,....#,....#,#...#,.###.",
-  "6":"..##.,.#...,#....,####.,#...#,#...#,.###.", "7":"#####,....#,...#.,..#..,.#...,.#...,.#...",
-  "8":".###.,#...#,#...#,.###.,#...#,#...#,.###.", "9":".###.,#...#,#...#,.####,....#,...#.,.##..",
-  " ":".....,.....,.....,.....,.....,.....,.....", ":":".....,..#..,..#..,.....,..#..,..#..,.....",
-  "-":".....,.....,.....,#####,.....,.....,.....", ".":".....,.....,.....,.....,.....,..#..,.....",
-  ",":".....,.....,.....,.....,..#..,..#..,.#...", "'":"..#..,..#..,.....,.....,.....,.....,.....",
-  "!":"..#..,..#..,..#..,..#..,..#..,.....,..#..", "?":".###.,#...#,....#,...#.,..#..,.....,..#..",
-  "&":".##..,#..#.,#.#..,.#...,#.#.#,#..#.,.##.#", "/":"....#,...#.,...#.,..#..,.#...,.#...,#....",
-  "(":"...#.,..#..,.#...,.#...,.#...,..#..,...#.", ")":".#...,..#..,...#.,...#.,...#.,..#..,.#...",
-  "+":".....,..#..,..#..,#####,..#..,..#..,.....", "%":"##..#,##..#,...#.,..#..,.#...,#..##,#..##",
-  "·":".....,.....,..#..,..#..,.....,.....,.....",
-  ">":"#....,.#...,..#..,...#.,..#..,.#...,#....",
-  "<":"....#,...#.,..#..,.#...,..#..,...#.,....#",
-  "#":".#.#.,.#.#.,#####,.#.#.,#####,.#.#.,.#.#.",
-  "▲":"..#..,..#..,.###.,.###.,#####,#####,.....",
-  "▼":".....,#####,#####,.###.,.###.,..#..,.....",
-};
 const GW = 5, GH = 7, TRACK = 1;
-const glyphRows = ch => (GLYPHS[ch] || GLYPHS[ch?.toUpperCase?.()] || GLYPHS["?"]).split(",");
 const textW = s => s.length ? s.length * (GW + TRACK) - TRACK : 0;
-
-/* ===================================================================
-   SPRITES — hand-written pixel grids, recoloured per team and baked
-   into offscreen canvases once. The game ships no image files.
-
-   The field runs left to right, so players are drawn in a 3/4 side view
-   facing RIGHT; the renderer flips the x-scale to face left. The run
-   cycle is four frames — contact, pass, contact, pass — driven by
-   distance covered, so a slow lineman's legs turn over slower for free.
-
-     .  clear   k outline   h helmet   f facemask   s skin
-     j  jersey  t trim      p pants    c cleat      b ball
-   =================================================================== */
-const ART = {
-  stand: [
-    ".....kkkk....", "....khhhhkk..", "....khhhhhfk.", "....khhhhhfk.",
-    ".....ksskk...", "...kkjjjjk...", "..kjjjjjjjk..", "..kjttjjjjk..",
-    "..kjjjjjjjk..", "...kjjjjjk...", "...kppppk....", "...kppppk....",
-    "..kp...pk....", "..kc...ck....", "..kk...kk....",
-  ],
-  run1: [
-    ".....kkkk....", "....khhhhkk..", "....khhhhhfk.", "....khhhhhfk.",
-    ".....ksskk...", "..kkkjjjjkks.", ".kjjjjjjjjkk.", ".kjttjjjjjk..",
-    ".kjjjjjjjjk..", "s..kjjjjjk...", "..kppppppk...", ".kp..k..pk...",
-    ".kc...k.pk...", ".kk...kck....", "......kk.....",
-  ],
-  run2: [
-    ".....kkkk....", "....khhhhkk..", "....khhhhhfk.", "....khhhhhfk.",
-    ".....ksskk...", "...kkjjjjk...", "..kjjjjjjjk..", "..kjttjjjjk..",
-    "..kjjjjjjjk..", "...kjjjjjk...", "...kppppk....", "...kppppk....",
-    "...kp.pk.....", "...kc.ck.....", "...kk.kk.....",
-  ],
-  run3: [
-    ".....kkkk....", "....khhhhkk..", "....khhhhhfk.", "....khhhhhfk.",
-    ".....ksskk...", "s..kkjjjjkk..", ".kkjjjjjjjjk.", "..kjttjjjjjk.",
-    ".kkjjjjjjjk..", "...kjjjjjk..s", "...kppppppk..", "...kp..k..pk.",
-    "...kc..k..ck.", "...kk..kk.kk.", ".............",
-  ],
-  catch: [
-    ".....kkkk.ks.", "....khhhhkksk", "....khhhhhfks", "....khhhhhfk.",
-    ".....ksskk...", "...kkjjjjkk..", "..kjjjjjjjjk.", "..kjttjjjjjk.",
-    "..kjjjjjjjk..", "...kjjjjjk...", "...kppppk....", "...kppppk....",
-    "..kp...pk....", "..kc...ck....", "..kk...kk....",
-  ],
-  // Arm cocked, ball behind the ear. Held for the length of the windup, so the
-  // throw has a wind-up you can see rather than the ball simply appearing in
-  // the air a frame later.
-  throwIt: [
-    ".....kkkk....", "....khhhhkk..", "....khhhhhfk.", "bb..khhhhhfk.",
-    "bbbs.ksskk...", ".sskkjjjjk...", "..kjjjjjjjk..", "..kjttjjjjk..",
-    "..kjjjjjjjk..", "...kjjjjjk...", "...kppppk....", "...kppppk....",
-    "..kp...pk....", "..kc...ck....", "..kk...kk....",
-  ],
-  // Follow-through: arm out, ball gone, weight onto the front foot.
-  release: [
-    ".....kkkk....", "....khhhhkk..", "....khhhhhfk.", "....khhhhhfk.",
-    ".....ksskk...", "...kkjjjjkss.", "..kjjjjjjjk.b", "..kjttjjjjk..",
-    "..kjjjjjjjk..", "...kjjjjjk...", "...kppppk....", "...kppppk....",
-    "..kp..pk.....", "..kc..ck.....", "..kk..kk.....",
-  ],
-  // A man about to put someone on the floor, rather than a man standing next
-  // to someone who then falls over.
-  tackle: [
-    ".............", ".....kkkk....", "....khhhhkk..", "....khhhhhfk.",
-    ".....ksskkss.", "...kkjjjjkss.", "..kjjjjjjjk..", "..kjttjjjjk..",
-    "..kjjjjjjjk..", "..kjjjjjk....", "..kppppk.....", ".kppppk......",
-    ".kp..pk......", "kc...ck......", "kk...kk......",
-  ],
-  block: [
-    ".....kkkk......", "....khhhhkk....", "....khhhhhfk...", "....khhhhhfk...",
-    ".....ksskk.....", "...kkjjjjk.....", "..kjjjjjjjkkkk.", "..kjttjjjjjssk.",
-    "..kjjjjjjjkkkk.", "...kjjjjjk.....", "...kppppk......", "...kppppk......",
-    "..kp...pk......", "..kc...ck......", "..kk...kk......",
-  ],
-  dive: [
-    "..........kkkk..", ".........khhhhk.", "kk......khhhhffk", "kckkkk..kssk....",
-    ".kkjjjkkjjjk....", "..kjjjjjjjjjk...", "..kppppjjjjk....", ".kppppk.kkk.....",
-    "kck.kk..........",
-  ],
-  down: [
-    "................", "....kkkkkk......", "...kjjjjjjkkkk..", "..kjjjjjjjhhhhk.",
-    ".kppppjjjjhhffk.", "kcppppkkkkkkkk..", "kk.kkk..........", "................",
-  ],
-};
-// The cycle a running player walks through. Two contact frames and two
-// passes, so the legs read as a stride rather than a flicker.
-const RUN_CYCLE = ["run1", "run2", "run3", "run2"];
-const BALL_ART = [".bbb.", "bblbb", "bblbb", ".bbb."];
-
-const PAL_STATIC = { k: "#101418", c: "#171B1F", s: "#C98F63", b: "#7B4A22", l: "#F0EDE4" };
-
-const spriteCache = new Map();
-function sprite(name, team, unit) {
-  const key = name + "|" + team.ab + "|" + unit;
-  let hit = spriteCache.get(key);
-  if (hit) return hit;
-  const grid = ART[name] || ART.stand;
-  const pal = Object.assign({}, PAL_STATIC, {
-    h: team.helmet, j: team.jersey, t: team.trim, p: team.pants,
-  });
-  hit = bake(grid, pal, unit);
-  spriteCache.set(key, hit);
-  return hit;
-}
-function ballSprite(unit) {
-  const key = "ball|" + unit;
-  let hit = spriteCache.get(key);
-  if (!hit) { hit = bake(BALL_ART, PAL_STATIC, unit); spriteCache.set(key, hit); }
-  return hit;
-}
-function bake(grid, pal, unit) {
-  const w = grid[0].length, h = grid.length;
-  const c = document.createElement("canvas");
-  c.width = w * unit; c.height = h * unit;
-  const g = c.getContext("2d");
-  for (let y = 0; y < h; y++) {
-    const row = grid[y];
-    for (let x = 0; x < w; x++) {
-      const col = pal[row[x]];
-      if (!col) continue;
-      g.fillStyle = col;
-      g.fillRect(x * unit, y * unit, unit, unit);
-    }
-  }
-  return { canvas: c, w, h };
-}
 
 /* ===================================================================
    AUDIO — procedural chiptune. No sound files ship with the game.
@@ -1062,14 +908,59 @@ const SCHEMES = [
     vsRun: 0.5, vsPass: 0.45,
   },
   {
-    id: "zone", name: "COVER 2",
-    align: [{ x: -2.5, y: 1.5 }, { x: 2.5, y: 1.5 }, { x: -7, y: 7 }, { x: 7, y: 7 },
-            { x: -12, y: 5 }, { x: 12, y: 5 }, { x: 0, y: 16 }],
-    jobs: [{ t: "rush" }, { t: "contain", side: -1 },
-           { t: "zone", x: -7, y: 10, r: 9 }, { t: "zone", x: 7, y: 10, r: 9 },
-           { t: "zone", x: -12, y: 6, r: 8 }, { t: "zone", x: 12, y: 6, r: 8 },
-           { t: "zone", x: 0, y: 20, r: 16 }],
+    id: "cover2", name: "COVER 2",
+    // Two safeties splitting the deep field, five underneath. Soft in the
+    // seam between them, which is the whole point of the look.
+    align: [{ x: -2.5, y: 1.5 }, { x: 2.5, y: 1.5 }, { x: 0, y: 6 },
+            { x: -10, y: 4 }, { x: 10, y: 4 }, { x: -8, y: 17 }, { x: 8, y: 17 }],
+    jobs: [{ t: "rush" }, { t: "rush" }, { t: "zone", x: 0, y: 8, r: 7 },
+           { t: "zone", x: -10, y: 5, r: 7 }, { t: "zone", x: 10, y: 5, r: 7 },
+           { t: "zone", x: -8, y: 20, r: 13 }, { t: "zone", x: 8, y: 20, r: 13 }],
     vsRun: 0.45, vsPass: 0.78,
+  },
+  {
+    id: "cover3", name: "COVER 3",
+    // Three deep, four under. Hard to throw over, and it gives up the flat.
+    align: [{ x: -2.5, y: 1.5 }, { x: 2.5, y: 1.5 }, { x: 0, y: 6 }, { x: -9, y: 6 },
+            { x: -12, y: 16 }, { x: 0, y: 20 }, { x: 12, y: 16 }],
+    jobs: [{ t: "rush" }, { t: "rush" }, { t: "zone", x: 0, y: 9, r: 8 },
+           { t: "zone", x: -10, y: 5, r: 7 },
+           { t: "zone", x: -13, y: 19, r: 12 }, { t: "zone", x: 0, y: 24, r: 13 },
+           { t: "zone", x: 13, y: 19, r: 12 }],
+    vsRun: 0.5, vsPass: 0.8,
+  },
+  {
+    id: "press", name: "PRESS MAN",
+    // Hands on at the line. Beat the jam and there is one safety back there;
+    // do not beat it and nothing comes open at all.
+    align: [{ x: -2.5, y: 1.5 }, { x: 2.5, y: 1.5 }, { x: -6, y: 4 },
+            { x: -11, y: 1.2 }, { x: 11, y: 1.2 }, { x: 4.5, y: 2 }, { x: 0, y: 16 }],
+    jobs: [{ t: "rush" }, { t: "rush" }, { t: "man", i: 1 },
+           { t: "press", i: 2 }, { t: "press", i: 3 }, { t: "press", i: 4 },
+           { t: "zone", x: 0, y: 19, r: 15 }],
+    vsRun: 0.55, vsPass: 0.72,
+  },
+  {
+    id: "nickel", name: "NICKEL",
+    // An extra man in coverage and only two rushing. You will have time; you
+    // will not have anybody open cheaply.
+    align: [{ x: -2.5, y: 1.5 }, { x: 2.5, y: 1.5 }, { x: 0, y: 7 }, { x: -10, y: 6 },
+            { x: 10, y: 6 }, { x: -6, y: 15 }, { x: 6, y: 15 }],
+    jobs: [{ t: "rush" }, { t: "rush" }, { t: "spy" },
+           { t: "man", i: 2 }, { t: "man", i: 3 },
+           { t: "zone", x: -7, y: 18, r: 12 }, { t: "zone", x: 7, y: 18, r: 12 }],
+    vsRun: 0.4, vsPass: 0.82,
+  },
+  {
+    id: "firezone", name: "FIRE ZONE",
+    // Three come, and one of the men you expected to come drops instead.
+    align: [{ x: -2.5, y: 1.5 }, { x: 2.5, y: 1.5 }, { x: -7, y: 2 }, { x: 6, y: 4 },
+            { x: -11, y: 6 }, { x: 11, y: 6 }, { x: 0, y: 15 }],
+    jobs: [{ t: "rush" }, { t: "rush" }, { t: "rush" },
+           { t: "zone", x: 6, y: 8, r: 8 },
+           { t: "man", i: 2 }, { t: "man", i: 3 },
+           { t: "zone", x: 0, y: 18, r: 13 }],
+    vsRun: 0.48, vsPass: 0.66,
   },
   {
     id: "prevent", name: "PREVENT",
@@ -1085,14 +976,26 @@ const SCHEMES = [
     id: "goalline", name: "GOAL LINE",
     align: [{ x: -3, y: 1 }, { x: 3, y: 1 }, { x: -6, y: 3 }, { x: 6, y: 3 },
             { x: -10, y: 5 }, { x: 10, y: 5 }, { x: 0, y: 7 }],
-    // Three men filling the same crease meant a short-yardage carry was a
-    // guaranteed loss — you could not convert fourth and one at all. The
-    // middle man plays a shallow zone instead: still stingy, no longer a wall.
     jobs: [{ t: "rush" }, { t: "rush" }, { t: "fill", bias: -1 }, { t: "fill", bias: 1 },
            { t: "man", i: 2 }, { t: "man", i: 3 }, { t: "zone", x: 0, y: 6, r: 9 }],
     vsRun: 0.92, vsPass: 0.30,
   },
 ];
+const schemeBy = id => SCHEMES.find(s => s.id === id) || SCHEMES[0];
+
+// What you can actually see across the line before the snap: how many men are
+// standing deep, and how many are close enough to be coming. Read off the
+// alignment rather than off the scheme's name, because that is the read a
+// quarterback really gets — the label is not printed on their shirts.
+function readLook(scheme) {
+  let deep = 0, box = 0, press = 0;
+  for (const a of scheme.align) {
+    if (a.y >= 10) deep++;                       // standing off, playing back
+    else if (Math.abs(a.x) >= 8.5) { if (a.y <= 3) press++; }   // on the receiver
+    else if (a.y <= 6) box++;                    // close enough to be coming
+  }
+  return { deep, box, press };
+}
 
 // What you have been calling lately, decayed so it is a recent memory rather
 // than a season average. Without this you could call the same play every snap
@@ -1108,10 +1011,11 @@ function callScheme(state, rng) {
   const diff = DIFFS[SETTINGS.diff];
   const toGo = state.toGo, toGoal = FIELD.oppGoal - state.los;
   // The situations nobody misreads, whatever their grade.
-  if (toGoal <= 5) return SCHEMES[4];
-  if (state.q >= 4 && state.clock < 100 && state.them > state.us) return SCHEMES[3];
-  if (toGo <= 2) return rng.chance(0.6) ? SCHEMES[4] : SCHEMES[0];
-  if (state.down >= 3 && toGo >= 7) return rng.chance(0.5) ? SCHEMES[1] : SCHEMES[2];
+  if (toGoal <= 5) return schemeBy("goalline");
+  if (state.q >= 4 && state.clock < 100 && state.them > state.us) return schemeBy("prevent");
+  if (toGo <= 2) return rng.chance(0.6) ? schemeBy("goalline") : schemeBy("base");
+  if (state.down >= 3 && toGo >= 7)
+    return rng.pick([schemeBy("blitz"), schemeBy("cover2"), schemeBy("nickel"), schemeBy("firezone")]);
 
   // Playing the man comes before playing the situation, and before the
   // competence roll: even a poor defence eventually notices you have run the
@@ -1120,16 +1024,16 @@ function callScheme(state, rng) {
   const t = G.st.tend, seen = t.run + t.pass;
   if (seen > 2.5 && rng.chance(diff.learn)) {
     const runShare = t.run / seen;
-    if (runShare > 0.68) return rng.chance(0.6) ? SCHEMES[0] : SCHEMES[4];    // base / goal line
-    if (runShare < 0.22) return rng.chance(0.55) ? SCHEMES[2] : SCHEMES[1];   // cover 2 / blitz
+    if (runShare > 0.68) return rng.pick([schemeBy("base"), schemeBy("goalline"), schemeBy("base")]);
+    if (runShare < 0.22)
+      return rng.pick([schemeBy("cover2"), schemeBy("cover3"), schemeBy("nickel"),
+                       schemeBy("press"), schemeBy("blitz")]);
   }
 
   if (!rng.chance(diff.read)) return rng.pick(SCHEMES);
-  const roll = rng.unit();
-  if (roll < 0.36) return SCHEMES[0];
-  if (roll < 0.62) return SCHEMES[2];
-  if (roll < 0.85) return SCHEMES[1];
-  return SCHEMES[4];
+  // The everyday mix. Nothing exotic on first and ten.
+  return rng.pick([schemeBy("base"), schemeBy("base"), schemeBy("cover2"), schemeBy("cover3"),
+                   schemeBy("press"), schemeBy("nickel"), schemeBy("blitz"), schemeBy("firezone")]);
 }
 
 /* ===================================================================
@@ -1776,7 +1680,20 @@ function makePlay(o) {
       setWant(p, qb.x + off - p.x, qb.y - 0.8 - p.y);
       return;
     }
-    if (j.t === "man") {
+    if (j.t === "press") {
+      const t = P[j.i];
+      if (!t || t.mot === "down") return zoneAI(p, 0, 10, 10);
+      // Hands on at the line. For the length of the jam he mirrors his man and
+      // slows him down; after that it is ordinary man coverage, which is why
+      // beating the press is worth so much against this look.
+      if (S.t < CFG.pressTime && !S.threw) {
+        setWant(p, t.x - p.x, (t.y + 1.0) - p.y);
+        if (dist(p.x, p.y, t.x, t.y) < CFG.pressReach)
+          t.slowT = Math.max(t.slowT, CFG.pressSlow);
+        return;
+      }
+    }
+    if (j.t === "man" || j.t === "press") {
       const t = P[j.i];
       if (!t || t.mot === "down") return zoneAI(p, 0, 10, 10);
       // The same radius the receiver gets, on the same terms. It used to be nine
@@ -2069,7 +1986,7 @@ function newGame(myAb, oppAb, opts = {}) {
     poss: first,
     down: 1, toGo: 10, los: 35, lineToGain: 45, ballX: FIELD.midY,
     phase: "coin",
-    scheme: SCHEMES[0], chosen: null,
+    scheme: SCHEMES[0], chosen: null, audibles: [],
     tryFor: null,          // 'us' while your extra point is pending
     kick: null,            // live kick state
     drive: null,           // opponent drive ticker
@@ -2779,12 +2696,41 @@ function finishTheirDrive() {
 }
 
 /* ---- starting a snap ---------------------------------------------- */
+// Three answers to whatever they have just lined up in: something on the
+// ground, something quick, and a shot. The defence has already declared by the
+// time you see this, so changing the call is a real read rather than a reroll.
+function pickAudibles(current) {
+  const trio = ["dive", "slants", "verts"];
+  const out = [];
+  for (const id of trio) if (id !== current.id) out.push(playById(id));
+  for (const p of PLAYS) {
+    if (out.length >= 3) break;
+    if (p.id !== current.id && !out.includes(p)) out.push(p);
+  }
+  return out.slice(0, 3).map(p => p.id);
+}
+
 function snapPlay(play) {
   const s = G.st;
   s.chosen = play;
-  noteTendency(play.kind);
   s.scheme = callScheme({ down: s.down, toGo: s.toGo, los: s.los, q: s.q,
                           clock: s.clock, us: s.us, them: s.them }, RNG);
+  s.audibles = pickAudibles(play);
+  buildSnap(play);
+}
+
+// Change the call at the line. The front stays exactly as it was — they have
+// already shown you their hand, and this is you playing it.
+function reCall(play) {
+  const s = G.st;
+  s.chosen = play;
+  s.audibles = pickAudibles(play);
+  buildSnap(play);
+  Sound.blip();
+}
+
+function buildSnap(play) {
+  const s = G.st;
   fxReset();
   G.play = makePlay({
     play, scheme: s.scheme,
@@ -2829,9 +2775,12 @@ let UNIT = 5, ARTW = 500, ARTH = 230, PPY = 7, VIEWTOP = 0, VIEWH = 0;
 let NEEDS_ROTATE = false;
 let fieldCv = null, fieldKey = "";
 
-// Art units → device pixels. Rounding here rather than in art space is
-// what makes motion smooth instead of stepping a whole art pixel at a time.
-const D = a => Math.round(a * UNIT);
+// Art units → device pixels. Nothing rounds any more: the players are drawn as
+// shapes rather than blitted as bitmaps, so sub-pixel positions are exactly
+// what you want. The one thing that still has to land on a whole pixel is the
+// baked field texture, which blurs if you sample it off-grid — `DI` is for that.
+const D = a => a * UNIT;
+const DI = a => Math.round(a * UNIT);
 
 function resize() {
   const shell = document.getElementById("shell");
@@ -2849,53 +2798,44 @@ function resize() {
   cv.height = ARTH * UNIT;
   cv.style.width = (cv.width / dpr) + "px";
   cv.style.height = (cv.height / dpr) + "px";
-  ctx.imageSmoothingEnabled = false;
+  ctx.imageSmoothingEnabled = true;
 
   VIEWTOP = Math.round(ARTH * 0.1);
   VIEWH = ARTH - VIEWTOP;
   PPY = VIEWH / CFG.visibleW;
   fieldKey = "";
-  textCache.clear();
-  spriteCache.clear();
 }
 window.addEventListener("resize", resize);
 window.addEventListener("orientationchange", () => setTimeout(resize, 120));
 
-/* ---- text -------------------------------------------------------- */
-const textCache = new Map();
-function textCanvas(str, color) {
-  const key = str + "|" + color;
-  let hit = textCache.get(key);
-  if (hit) return hit;
-  const w = Math.max(1, textW(str)), h = GH;
-  const c = document.createElement("canvas");
-  c.width = w; c.height = h;
-  const g = c.getContext("2d");
-  g.fillStyle = color;
-  let ox = 0;
-  for (const ch of str) {
-    const rows = glyphRows(ch);
-    for (let y = 0; y < GH; y++) {
-      const row = rows[y];
-      for (let x = 0; x < GW; x++) if (row[x] === "#") g.fillRect(ox + x, y, 1, 1);
-    }
-    ox += GW + TRACK;
-  }
-  if (textCache.size > 500) textCache.clear();
-  textCache.set(key, c);
-  return c;
-}
-// x, y in art pixels. align: -1 left, 0 centre, 1 right.
+/* ---- text --------------------------------------------------------
+   A real typeface, drawn at device resolution. The 5x7 bitmap face
+   blown up by `UNIT` was the loudest "this is a pixel game" signal on
+   the screen after the players themselves.
+
+   IBM Plex Mono is monospaced and advances 0.6 em, so a ten-unit size
+   advances exactly the six units the old face did. Every panel, button
+   and column in this game is positioned on that grid and none of it had
+   to move. `y` is still the top of a seven-unit cap, as before.
+   ------------------------------------------------------------------ */
+const FACE = "'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace";
+const fontAt = (scale, weight) => (weight || 500) + " " + D(10 * scale) + "px " + FACE;
+
 function text(str, x, y, { scale = 1, color = COL.ink, align = 0, shadow = true } = {}) {
-  if (!str) return;
-  const c = textCanvas(str, color);
-  const w = c.width * scale, h = c.height * scale;
-  const ax = align < 0 ? x : align > 0 ? x - w : x - w / 2;
+  if (str === null || str === undefined || str === "") return;
+  str = String(str);
+  ctx.save();
+  ctx.font = fontAt(scale, 500);
+  ctx.textAlign = align < 0 ? "left" : align > 0 ? "right" : "center";
+  ctx.textBaseline = "alphabetic";
+  const by = D(y + 7 * scale);
   if (shadow) {
-    const sc = textCanvas(str, "#080B0E");
-    ctx.drawImage(sc, 0, 0, sc.width, sc.height, D(ax + 1), D(y + 1), D(w), D(h));
+    ctx.fillStyle = "rgba(8,11,14,.85)";
+    ctx.fillText(str, D(x + 0.8), by + D(0.8));
   }
-  ctx.drawImage(c, 0, 0, c.width, c.height, D(ax), D(y), D(w), D(h));
+  ctx.fillStyle = color;
+  ctx.fillText(str, D(x), by);
+  ctx.restore();
 }
 const rect = (x, y, w, h, col) => {
   ctx.fillStyle = col;
@@ -2945,14 +2885,14 @@ function buildField() {
 
   // End-zone lettering, rotated to run up the back of each zone.
   const nameFor = (t, cxArt, flip) => {
-    const c = textCanvas(t.nick.slice(0, 11), t.trim);
-    const scale = Math.max(1, Math.floor((h - 8) / c.width));
-    const dw = c.width * scale, dh = c.height * scale;
+    const name = t.nick.slice(0, 11);
     g.save();
-    g.translate(Math.round(cxArt * UNIT), Math.round((h / 2) * UNIT));
+    g.translate(cxArt * UNIT, (h / 2) * UNIT);
     g.rotate(flip ? Math.PI / 2 : -Math.PI / 2);
-    g.drawImage(c, 0, 0, c.width, c.height,
-                -dw * UNIT / 2, -dh * UNIT / 2, dw * UNIT, dh * UNIT);
+    g.font = "600 " + ((h - 12) / name.length / 0.62) * UNIT + "px " + FACE;
+    g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillStyle = t.trim;
+    g.fillText(name, 0, 0);
     g.restore();
   };
   nameFor(G.st.my, X(FIELD.ownGoal / 2), driveRight());
@@ -2973,15 +2913,14 @@ function buildField() {
   for (let y = FIELD.ownGoal + 10; y <= FIELD.oppGoal - 10; y += 10) {
     const toGoal = FIELD.oppGoal - y;
     const label = String(toGoal > 50 ? 100 - toGoal : toGoal);
-    const c = textCanvas(label, COL.chalkDim);
-    const scale = Math.max(1, Math.round(PPY * 0.28));
-    const dw = c.width * scale, dh = c.height * scale;
     for (const [rowY, rot] of [[Y(FIELD.W - 6), -Math.PI / 2], [Y(6), Math.PI / 2]]) {
       g.save();
-      g.translate(Math.round(X(y) * UNIT), Math.round(rowY * UNIT));
+      g.translate(X(y) * UNIT, rowY * UNIT);
       g.rotate(rot);
-      g.drawImage(c, 0, 0, c.width, c.height,
-                  -dw * UNIT / 2, -dh * UNIT / 2, dw * UNIT, dh * UNIT);
+      g.font = "600 " + PPY * 2.2 * UNIT + "px " + FACE;
+      g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillStyle = COL.chalkDim;
+      g.fillText(label, 0, 0);
       g.restore();
     }
   }
@@ -3160,13 +3099,162 @@ function fxDrawPuffs() {
 // renderer has to work it out from the outside, and it flips on a turnover.
 const attackingWith = (p, sim) => (p.side === "off") !== sim.turnover;
 
+/* ===================================================================
+   FIGURES — the players, drawn rather than blitted.
+
+   Bold flat shapes with a dark edge so a body reads against turf and
+   against the man next to it. Everything below is in ART UNITS with the
+   figure's feet at the origin and `f` as his facing (+1 right, -1 left),
+   which is why no mirroring transform is needed and the jersey number
+   still comes out the right way round.
+
+   Build varies by position, so a pile of men is a pile of different
+   men: linemen are broad and short-legged, receivers are light and
+   long. That was the whole complaint about the old sprites — one body
+   in eight jersey colours.
+   =================================================================== */
+const BUILD = {
+  QB: { w: 1.00, h: 1.00, pad: 3.7 }, RB: { w: 1.00, h: 0.95, pad: 3.9 },
+  WR: { w: 0.90, h: 1.07, pad: 3.3 }, TE: { w: 1.08, h: 1.03, pad: 4.3 },
+  OL: { w: 1.18, h: 0.96, pad: 5.2 }, DL: { w: 1.15, h: 0.97, pad: 5.0 },
+  LB: { w: 1.06, h: 1.00, pad: 4.4 }, CB: { w: 0.88, h: 1.03, pad: 3.2 },
+  S:  { w: 0.95, h: 1.01, pad: 3.6 }, K: { w: 0.94, h: 0.98, pad: 3.4 },
+};
+const EDGE = "#0D1116";
+const SKIN = "#C98F63";
+
+// A limb or a torso: a thick round-capped line, drawn twice so it carries a
+// dark edge. Every shape in a figure is one of these or a circle.
+function limb(x1, y1, x2, y2, w, col, edge = 1.5) {
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+  ctx.strokeStyle = EDGE; ctx.lineWidth = w + edge; ctx.stroke();
+  ctx.strokeStyle = col; ctx.lineWidth = w; ctx.stroke();
+}
+function blob(x, y, r, col, edge = 0.8) {
+  ctx.beginPath(); ctx.arc(x, y, r + edge, 0, Math.PI * 2);
+  ctx.fillStyle = EDGE; ctx.fill();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = col; ctx.fill();
+}
+
+function drawFigure(p, team, pose, cx, cy, faceLeft, phase, holding) {
+  const b = BUILD[p.pos] || BUILD.QB;
+  const f = faceLeft ? -1 : 1;
+
+  ctx.save();
+  ctx.translate(D(cx), D(cy));
+  ctx.scale(UNIT * b.w, UNIT * b.h);
+  if (pose === "down") { ctx.rotate(f * 1.4); ctx.translate(f * 3.5, 4); }
+
+  const jersey = team.jersey, pants = team.pants, helmet = team.helmet, trim = team.trim;
+  // Proportions matter more than detail at this size. The first attempt made
+  // the head as wide as the shoulders and the torso a single fat pill, and the
+  // result read as an egg with legs. A football player is legs, then a narrow
+  // waist, then a very wide shoulder line, then a small head — the pads are
+  // the whole silhouette, so they are the widest thing on him.
+  const hipY = -6.6, padY = -12.3, headY = -15.6;
+  const span = b.pad;
+
+  // ---- legs ------------------------------------------------------------
+  let la, lb, lift = 0;
+  if (pose === "run") { la = Math.sin(phase) * 3.6; lb = -la; lift = Math.abs(Math.sin(phase)) * 1.5; }
+  else if (pose === "block" || pose === "tackle") { la = f * 3.0; lb = -f * 2.4; }
+  else { la = 1.7; lb = -1.7; }
+  limb(0, hipY, f * lb, -0.5, 2.6, pants);
+  limb(0, hipY, f * la, -0.5 - lift, 2.6, pants);
+  blob(f * lb, -0.4, 0.85, "#15181C", 0.35);
+  blob(f * la, -0.4 - lift, 0.85, "#15181C", 0.35);
+
+  // ---- torso, waist to collar -----------------------------------------
+  const leanX = pose === "tackle" ? f * 2.2 : pose === "block" ? f * 1.5
+              : pose === "run" ? f * 1.0 : 0;
+  limb(0, hipY + 0.4, leanX * 0.8, padY + 1.2, 4.6, jersey);
+
+  // ---- the pads --------------------------------------------------------
+  // One wide horizontal capsule. This is the thing that makes him read as a
+  // footballer rather than a man, and how a lineman reads as a lineman.
+  limb(leanX * 0.8 - span, padY, leanX * 0.8 + span, padY, 3.6, jersey);
+  // A trim band across them, the one club colour visible at this size.
+  limb(leanX * 0.8 - span * 0.62, padY - 1.1, leanX * 0.8 + span * 0.62, padY - 1.1, 1.0, trim, 0);
+
+  // ---- arms ------------------------------------------------------------
+  const sx = leanX * 0.8 + f * span * 0.72, sy = padY + 0.9;
+  const arm = (ex, ey) => {
+    limb(sx, sy, ex, ey, 2.1, jersey);
+    blob(ex, ey, 1.05, SKIN, 0.45);
+  };
+  const back = leanX * 0.8 - f * span * 0.72;
+  const armBack = (ex, ey) => {
+    limb(back, sy, ex, ey, 2.1, jersey);
+    blob(ex, ey, 1.05, SKIN, 0.45);
+  };
+  if (pose === "throwIt") {
+    armBack(back - f * 4.4, sy - 4.6);
+    arm(sx + f * 2.6, sy + 1.2);
+  } else if (pose === "release") {
+    arm(sx + f * 5.4, sy - 2.2);
+    armBack(back - f * 1.6, sy + 2.6);
+  } else if (pose === "catch") {
+    arm(sx + f * 3.0, sy - 4.8);
+    armBack(back + f * 3.6, sy - 4.2);
+  } else if (pose === "tackle" || pose === "block") {
+    arm(sx + f * 4.8, sy - 0.6);
+    armBack(back + f * 5.4, sy + 1.0);
+  } else if (pose === "run") {
+    arm(sx + f * Math.sin(phase) * 3.0, sy + 2.6);
+    armBack(back - f * Math.sin(phase) * 3.0, sy + 2.2);
+  } else {
+    arm(sx + f * 1.2, sy + 3.4);
+    armBack(back - f * 1.2, sy + 3.4);
+  }
+
+  // ---- helmet ----------------------------------------------------------
+  const hx = leanX * 1.1 + f * 0.5;
+  blob(hx, headY, 2.35, helmet, 0.75);
+  // A stripe over the crown and a facemask in front: two marks, and suddenly
+  // he is facing a direction.
+  ctx.save();
+  ctx.beginPath(); ctx.arc(hx, headY, 2.35, 0, Math.PI * 2); ctx.clip();
+  limb(hx - 2.6, headY - 1.4, hx + 2.6, headY - 1.4, 0.9, trim, 0);
+  ctx.restore();
+  limb(hx + f * 1.9, headY + 0.5, hx + f * 2.5, headY + 1.5, 0.85, "#C9CEDA", 0.6);
+
+  if (holding) {
+    ctx.save();
+    ctx.translate(sx + f * 1.8, sy + 2.4);
+    ctx.rotate(f * -0.55);
+    ctx.beginPath(); ctx.ellipse(0, 0, 2.3, 1.4, 0, 0, Math.PI * 2);
+    ctx.fillStyle = EDGE; ctx.fill();
+    ctx.beginPath(); ctx.ellipse(0, 0, 1.8, 1.0, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "#8A5228"; ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+// The ball in flight or on the floor.
+function drawBall(cx, cy, lift, spin) {
+  ctx.save();
+  ctx.translate(D(cx), D(cy - lift));
+  ctx.scale(UNIT, UNIT);
+  ctx.rotate(spin || 0);
+  ctx.beginPath(); ctx.ellipse(0, 0, 2.7, 1.7, 0, 0, Math.PI * 2);
+  ctx.fillStyle = EDGE; ctx.fill();
+  ctx.beginPath(); ctx.ellipse(0, 0, 2.1, 1.2, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "#8A5228"; ctx.fill();
+  ctx.strokeStyle = "#F0EDE4"; ctx.lineWidth = 0.35; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(-0.8, 0); ctx.lineTo(0.8, 0); ctx.stroke();
+  ctx.restore();
+}
+
 /* ---- the play ---------------------------------------------------- */
 function drawField() {
   const shake = G.play ? G.play.shake : 0;
   const ox = shake > 0 ? Math.round((Math.random() - 0.5) * shake * 7) : 0;
   const oy = shake > 0 ? Math.round((Math.random() - 0.5) * shake * 7) : 0;
-  ctx.drawImage(fieldCv, D(camX - ox), D(camY - oy), D(ARTW), D(VIEWH),
-                0, D(VIEWTOP), D(ARTW), D(VIEWH));
+  ctx.drawImage(fieldCv, DI(camX - ox), DI(camY - oy), DI(ARTW), DI(VIEWH),
+                0, DI(VIEWTOP), DI(ARTW), DI(VIEWH));
 }
 
 function drawLines() {
@@ -3187,7 +3275,6 @@ function drawPlayers(dt) {
   if (!sim) return;
   // Players nearer the bottom touchline overlap those behind them.
   const order = sim.P.slice().sort((a, b) => b.x - a.x);
-  const ball = ballSprite(UNIT);
 
   for (const p of order) {
     const team = p.side === "off" ? G.st.my : G.st.opp;
@@ -3213,37 +3300,34 @@ function drawPlayers(dt) {
     else if (lunging) frame = "tackle";
     else if (p.mot === "engaged") frame = "block";
     else if (speed < 0.6) frame = "stand";
-    else frame = RUN_CYCLE[Math.floor(p._stride / 0.8) % RUN_CYCLE.length];
+    else frame = "run";
 
-    const sp = sprite(frame, team, UNIT);
     const cxA = scrX(p.y), cyA = scrY(p.x);
     if (cxA < -30 || cxA > ARTW + 30) continue;
-
-    // Shadow first, so bodies sit on the turf rather than float.
-    ctx.fillStyle = COL.shadow;
-    ctx.fillRect(D(cxA - 4), D(cyA - 1.5), D(8), D(3));
 
     // sin(face) is the downfield component, and downfield is screen-left only
     // when you are attacking that way.
     const faceLeft = driveRight() ? Math.sin(p.face) < 0 : Math.sin(p.face) > 0;
-    const dx = D(cxA - sp.w / 2), dy = D(cyA - sp.h + 2);
-    if (faceLeft) {
+
+    // A ring under the man the thumb is driving, rather than a bar stuck to
+    // his shins.
+    if (p.id === sim.user && p.mot !== "down") {
       ctx.save();
-      ctx.translate(dx + sp.w * UNIT, dy);
-      ctx.scale(-1, 1);
-      ctx.drawImage(sp.canvas, 0, 0);
+      ctx.beginPath();
+      ctx.ellipse(D(cxA), D(cyA + 0.5), D(6.2), D(2.4), 0, 0, Math.PI * 2);
+      ctx.strokeStyle = COL.flood; ctx.lineWidth = D(0.8); ctx.stroke();
       ctx.restore();
-    } else {
-      ctx.drawImage(sp.canvas, dx, dy);
     }
 
-    if (p.id === sim.user && p.mot !== "down") {
-      ctx.fillStyle = COL.flood;
-      ctx.fillRect(D(cxA - 5), D(cyA + 1), D(10), UNIT);
-    }
-    if (p.hasBall && p.mot !== "down" && frame !== "throwIt" && frame !== "release") {
-      ctx.drawImage(ball.canvas, D(cxA + (faceLeft ? -6 : 2)), D(cyA - 9));
-    }
+    // Shadow, so bodies sit on the turf rather than float.
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(D(cxA), D(cyA), D(4.6), D(1.8), 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0,0,0,.34)"; ctx.fill();
+    ctx.restore();
+
+    const holding = p.hasBall && p.mot !== "down" && frame !== "throwIt" && frame !== "release";
+    drawFigure(p, team, frame, cxA, cyA, faceLeft, p._stride * 4.4, holding);
   }
 
   // Markers over the men you can still throw to, coloured by how much room he
@@ -3254,10 +3338,17 @@ function drawPlayers(dt) {
       const mx = scrX(r.y), my = scrY(r.x) - 20;
       const room = nearestDefender(sim, r);
       const col = room > 3.6 ? COL.good : room > 2.1 ? COL.flood : COL.bad;
-      rect(mx - 2, my - 1, 4, 5, COL.ink);
-      rect(mx - 1, my, 2, 3, col);
-      // A tail so the marker points at the man rather than floating over him.
-      rect(mx - 1, my + 4, 2, 3, COL.ink);
+      // A chevron pointing down at him, drawn rather than stacked out of
+      // rectangles — the old marker was three blocks and looked it.
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(D(mx - 3.2), D(my));
+      ctx.lineTo(D(mx + 3.2), D(my));
+      ctx.lineTo(D(mx), D(my + 4.4));
+      ctx.closePath();
+      ctx.fillStyle = EDGE; ctx.lineWidth = D(1.6); ctx.strokeStyle = EDGE;
+      ctx.stroke(); ctx.fillStyle = col; ctx.fill();
+      ctx.restore();
     }
   }
 
@@ -3267,9 +3358,13 @@ function drawPlayers(dt) {
   if (b.state === "air" || b.state === "loose") {
     const bx = scrX(b.y), by = scrY(b.x);
     const lift = b.h * PPY * 0.9;
-    ctx.fillStyle = COL.shadow;
-    ctx.fillRect(D(bx - 3), D(by - 1.5), D(6), D(3));
-    ctx.drawImage(ball.canvas, D(bx - ball.w / 2), D(by - lift - ball.h));
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(D(bx), D(by), D(2.6), D(1.1), 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0,0,0,.28)"; ctx.fill();
+    ctx.restore();
+    // A ball in flight turns over; one on the floor does not.
+    drawBall(bx, by, lift + 2, b.state === "air" ? b.tt * 9 : 0);
   }
 }
 
@@ -3502,8 +3597,39 @@ function drawPlayCall() {
 
 function drawPresnap() {
   const s = G.st;
-  text("TAP TO SNAP", ARTW / 2, ARTH - 30, { scale: 2, color: COL.flood });
-  text(s.chosen.name + "   vs   " + s.scheme.name, ARTW / 2, ARTH - 14, { color: COL.dim });
+  const look = readLook(s.scheme);
+  // What a quarterback actually gets to read: how many are deep, how many are
+  // close enough to be coming, how many are pressed on a receiver. Not the name
+  // of the call — that is not printed on their shirts, and being told it made
+  // the whole defensive playbook pointless.
+  const hint = look.deep === 0 ? "NOBODY DEEP"
+             : look.press >= 2 ? "PRESS"
+             : look.deep >= 3 ? "DEEP SHELL"
+             : look.box >= 5 ? "STACKED BOX"
+             : look.deep === 2 ? "TWO HIGH"
+             : "BALANCED";
+
+  const pw = 330, px = Math.round((ARTW - pw) / 2), py = ARTH - 64;
+  panel(px, py, pw, 60, COL.night2, COL.edge);
+
+  const counts = look.deep + " DEEP  ·  " + look.box + " BOX" +
+                 (look.press ? "  ·  " + look.press + " PRESSED" : "");
+  text(counts, px + 10, py + 5, { align: -1, color: COL.ink });
+  text(hint, px + pw - 10, py + 5, { align: 1, color: COL.flood });
+  rect(px + 8, py + 15, pw - 16, 1, COL.edge);
+
+  // Three answers, and the front will not change if you take one.
+  const ids = s.audibles || [];
+  const bw = 100, gap = 5;
+  const total = ids.length * bw + Math.max(0, ids.length - 1) * gap;
+  ids.forEach((id, i) => {
+    const pl = playById(id);
+    button("audible:" + id, px + (pw - total) / 2 + i * (bw + gap), py + 20, bw, 22,
+           pl.name, { sub: pl.tag });
+  });
+
+  text("RUNNING " + s.chosen.name + "   ·   TAP THE FIELD TO SNAP",
+       px + pw / 2, py + 47, { color: COL.dim, shadow: false });
 }
 
 function drawLiveControls() {
@@ -3534,18 +3660,21 @@ function drawKick() {
   const s = G.st, k = s.kick;
   const postsY = FIELD.oppGoal + FIELD.EZ;      // back line, where the posts are
 
-  // The unit, drawn with the same sprites as a live play.
-  const ball = ballSprite(UNIT);
+  // The unit, drawn with the same figures as a live play.
   for (const pl of k.players) {
     const team = pl.side === "off" ? s.my : s.opp;
-    const frame = pl.role === "kicker" && k.flight ? "run2"
-                : pl.role === "hold" ? "block"
-                : pl.side === "def" ? "run1" : "block";
-    const sp = sprite(frame, team, UNIT);
+    const pose = pl.role === "kicker" ? (k.flight ? "run" : "stand")
+               : pl.role === "hold" ? "catch"
+               : pl.side === "def" ? "run" : "block";
     const cxA = scrX(pl.y), cyA = scrY(pl.x);
-    ctx.fillStyle = COL.shadow;
-    ctx.fillRect(D(cxA - 4), D(cyA - 1.5), D(8), D(3));
-    ctx.drawImage(sp.canvas, D(cxA - sp.w / 2), D(cyA - sp.h + 2));
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(D(cxA), D(cyA), D(4.6), D(1.8), 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0,0,0,.34)"; ctx.fill();
+    ctx.restore();
+    const build = pl.role === "line" ? "OL" : pl.role === "kicker" ? "K" : "LB";
+    drawFigure({ pos: build, num: 0 }, team, pose, cxA, cyA,
+               pl.side === "def" ? !driveRight() : driveRight(), k.t * 5 + pl.x);
   }
 
   // Goalposts, drawn on top of the field so they read against the crowd.
@@ -3558,13 +3687,13 @@ function drawKick() {
   // The ball, in hand or in flight.
   if (!k.flight) {
     const bx = scrX(k.spotY), by = scrY(k.spotX);
-    ctx.drawImage(ball.canvas, D(bx - ball.w / 2), D(by - 6));
+    drawBall(bx, by, 4, 0.35);
   } else {
     const f = k.flight, t = clamp(f.t / f.dur, 0, 1);
     const fy = lerp(k.spotY, postsY, t);
     const fx = lerp(k.spotX, FIELD.midY + f.landX, t);
     const lift = Math.sin(t * Math.PI) * 9 + t * 3;
-    ctx.drawImage(ball.canvas, D(scrX(fy) - ball.w / 2), D(scrY(fx) - lift * PPY * 0.5 - ball.h));
+    drawBall(scrX(fy), scrY(fx), lift * PPY * 0.5 + 3, f.t * 11);
     if (t >= 1) {
       const label = f.good ? "GOOD" : (f.hasLeg ? "WIDE" : "SHORT");
       const w = textW(label) * 3 + 20;
@@ -4270,6 +4399,7 @@ function handleTap(id) {
 
   const s = G.st;
   if (id.startsWith("play:")) { snapPlay(playById(id.slice(5))); return; }
+  if (id.startsWith("audible:")) { reCall(playById(id.slice(8))); return; }
   if (id === "punt") { punt(); return; }
   if (id === "fg") { beginKick("fg"); return; }
   if (id === "xp") { beginTry(false); return; }
@@ -4324,7 +4454,12 @@ function update(dt) {
 
   if (s.phase === "coin") { s.phase = s.poss === "us" ? "playcall" : "defense"; }
 
-  if (s.phase === "presnap" && Input.snap) { Input.snap = false; G.play.snap(); s.phase = "live"; }
+  if (s.phase === "presnap" && Input.snap) {
+    Input.snap = false;
+    noteTendency(s.chosen.kind);
+    G.play.snap();
+    s.phase = "live";
+  }
   Input.snap = false;
 
   if (s.phase === "live" && G.play) {

@@ -120,7 +120,7 @@ The game's own source is loaded under a DOM stub and driven exactly as the
 browser drives it, so the tests exercise shipping code rather than a copy.
 
 ```bash
-node tools/test.js        # 105 checks: termination, determinism, rules, balance, a career
+node tools/test.js        # 104 checks: termination, determinism, rules, balance, a career
 node tools/skill.js       # the same games played by four different standards of thumb
 node tools/cpu.js         # points per drive for the opponent's simulated possession
 YEARS=12 node tools/career.js   # plays a twelve-season career through the real screens
@@ -332,6 +332,52 @@ the game showed you a field pointing the opposite way to the one you had been
 playing on. It now matches, with both goals labelled and a chevron showing
 which way they are coming.
 
+### The art is drawn, not blitted
+
+The players were 13x15 hand-typed character grids baked into offscreen canvases
+and scaled up with `image-rendering: pixelated`. Playtest verdict: *"everyone is
+the same body in a different jersey colour."* Which was exactly true — one grid,
+eight palettes.
+
+They are procedural vector figures now. Bold flat shapes with a dark edge so a
+body reads against turf and against the man next to it, drawn at device
+resolution with no quantisation anywhere except the baked field texture, which
+still has to land on whole pixels or it blurs.
+
+The first attempt was worse than what it replaced: I made the head as wide as
+the shoulders and the torso a single fat pill, and the result read as an egg
+with legs. **The pads are the whole silhouette.** A football player is legs, a
+narrow waist, a very wide shoulder line, then a small head — get that order
+right and everything else is detail. Pad span is what tells a lineman from a
+receiver at this size, so it varies by position along with height and width.
+
+The 5x7 bitmap face went with them. The layout grid it defined — six units
+across, seven down, one character — survived intact, because the typeface that
+replaced it is monospaced and sized to advance exactly six units. Not one panel,
+button or column had to move.
+
+### The defensive playbook
+
+Nine fronts, not five: base, blitz, cover two, cover three, press man, nickel,
+fire zone, prevent, goal line. Press corners genuinely jam — for the length of
+the jam they mirror their man and slow him, and after that it is ordinary man
+coverage, which is why beating the press against that look is worth so much.
+
+Two things make a playbook matter more than its length:
+
+**You can read the look.** The presnap screen used to print the name of their
+call, which is not information a quarterback has and made the whole playbook
+pointless. It now reports what you can actually see across the line — how many
+are deep, how many are close enough to be coming, how many are pressed — read
+off the alignment rather than off the label. Nobody deep is the loudest tell in
+football and gets named first.
+
+**You can answer it.** Three audibles at the line: something on the ground,
+something quick, and a shot. The front does not change when you take one — they
+have already declared, and this is you playing it. Your run/pass tendency counts
+what you *ran*, not what you first selected, so an audible does not lie to the
+defence's memory.
+
 ### Throwing, and what it looks like
 
 The ball is thrown at a **point**, not at a man, and leading a receiver is the
@@ -357,10 +403,13 @@ of the windup, `release` is the follow-through with the ball already gone.
 `tackle` is a defender reaching, so a man goes to the floor because somebody put
 him there rather than falling over next to a bystander.
 
-`tools/test.js` checks the sheet itself: every grid rectangular, every character
-a colour the palette knows, and the run cycle naming frames that exist. A row
-typed one character short is invisible in the source and extremely visible on
-the field.
+`tools/test.js` drives every pose through the real renderer against the DOM
+stub, for every build. There is no sprite sheet to check any more; what can go
+wrong instead is a pose the frame picker produces that `drawFigure` has no
+branch for, and the man would simply stand there mid-tackle. It also caught the
+kick screen still reaching for the sprite functions after they were deleted,
+which is exactly the sort of thing that is invisible until someone lines up a
+field goal.
 
 **Effects are driven by watching the simulation, never by it.** The renderer
 notices a completion, a body hitting the deck or a ball in the air and produces

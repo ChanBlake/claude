@@ -595,30 +595,33 @@ section("7e. a career");
   A.SCREEN = "title";
 }
 
-section("7f. the sprite sheet");
+section("7f. the figures");
 {
-  // Every frame is a hand-typed grid of characters. A row one character short
-  // is invisible in the source and very visible on the field, and a stray
-  // letter silently paints nothing at all.
-  const legal = new Set([".", "k", "h", "f", "s", "j", "t", "p", "c", "b", "l"]);
-  let ragged = null, stray = null;
-  const frames = Object.keys(A.ART);
-  for (const name of frames) {
-    const grid = A.ART[name];
-    const w = grid[0].length;
-    for (const row of grid) {
-      if (row.length !== w) ragged = ragged || `${name}: a row is ${row.length} wide, not ${w}`;
-      for (const ch of row) if (!legal.has(ch)) stray = stray || `${name}: '${ch}'`;
+  // The players are drawn rather than blitted now, so there is no sheet to
+  // check for ragged rows. What can go wrong instead is a pose the frame
+  // picker can produce that `drawFigure` has no branch for — the man would
+  // simply stand there mid-tackle. This drives every pose through the real
+  // renderer against the DOM stub and checks nothing throws.
+  const poses = ["stand", "run", "throwIt", "release", "catch", "tackle", "block", "down"];
+  let broke = null;
+  for (const pose of poses) {
+    for (const pos of Object.keys(A.BUILD)) {
+      try {
+        A.drawFigure({ pos, num: 12 }, TEAMS[0], pose, 100, 100, false, 1.2, pose === "run");
+        A.drawFigure({ pos, num: 88 }, TEAMS[2], pose, 100, 100, true, 2.4, false);
+      } catch (e) { broke = broke || `${pos}/${pose}: ${e.message}`; }
     }
   }
-  console.log(`   ${frames.length} frames: ${frames.join(", ")}`);
-  check("every sprite grid is rectangular", !ragged, ragged);
-  check("every pixel is a colour the palette knows", !stray, stray);
-  check("the throw is animated", frames.includes("throwIt") && frames.includes("release"),
-        frames.join(","));
-  // The run cycle has to name frames that exist, or a runner flickers.
-  const missing = A.RUN_CYCLE.filter(n => !A.ART[n]);
-  check("the run cycle names real frames", !missing.length, missing.join(","));
+  check("every pose draws for every build", !broke, broke);
+  // A build missing from the table would silently fall back to a quarterback's
+  // proportions, and a lineman would stop looking like a lineman.
+  const needed = ["QB", "RB", "WR", "TE", "OL", "DL", "LB", "CB", "S", "K"];
+  const missing = needed.filter(k => !A.BUILD[k]);
+  check("every position has its own build", !missing.length, missing.join(","));
+  const pads = needed.map(k => A.BUILD[k].pad);
+  check("a lineman is broader than a receiver", A.BUILD.OL.pad > A.BUILD.WR.pad + 1,
+        A.BUILD.OL.pad + " vs " + A.BUILD.WR.pad);
+  console.log(`   ${poses.length} poses x ${needed.length} builds; pad spans ${Math.min(...pads)}-${Math.max(...pads)}`);
 }
 
 section("8. units");
