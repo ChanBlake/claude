@@ -487,6 +487,30 @@ section("7c. turnover returns");
 /* =====================================================================
    8. Small units.
    ===================================================================== */
+section("7d. which way you attack");
+{
+  // The setting is a one-line change only if every consumer goes through the
+  // same two functions. These assert the pair is self-consistent both ways, and
+  // that the end zone you attack really is the far one on screen.
+  for (const right of [false, true]) {
+    A.SETTINGS.driveRight = right;
+    const label = right ? "attacking right" : "attacking left";
+    const own = A.fieldX(FIELD.ownGoal), opp = A.fieldX(FIELD.oppGoal);
+    check(`${label}: their end zone is downfield on screen`,
+          right ? opp > own : opp < own, `own ${own.toFixed(0)} opp ${opp.toFixed(0)}`);
+    // `fyAtScreen` is the inverse of `scrX` — the camera offset is part of both,
+    // which is what the aim clamp relies on to keep the cursor on screen.
+    let worst = 0;
+    for (const fy of [0, 12, 35, 60, 88, 110, 120]) {
+      const back = A.fyAtScreen(A.scrX(fy));
+      worst = Math.max(worst, Math.abs(back - fy));
+    }
+    check(`${label}: screen column maps back to the same yard line`,
+          worst < 1e-6, worst.toExponential(2));
+  }
+  A.SETTINGS.driveRight = false;
+}
+
 section("8. units");
 {
   check("field label reads from your side", A.fieldLabel(60, true) === "MIDFIELD", A.fieldLabel(60, true));

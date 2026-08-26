@@ -237,7 +237,7 @@ const CFG = {
   pursueLead: 1.5,       // seconds of intercept lead a defender may aim at
   // How long it takes to diagnose a run: the box reacts almost at once, the
   // secondary has to respect the pass first.
-  runReadFront: 0.3, runReadDeep: 0.7,
+  runReadFront: 0.2, runReadDeep: 0.45,
 
   // Kicking.
   kickRangeMin: 36, kickRangeMax: 60,
@@ -596,7 +596,8 @@ const Store = {
     try { localStorage.setItem("pixelbowl." + key, JSON.stringify(value)); } catch (e) { /* private mode */ }
   },
 };
-let SETTINGS = Store.read("settings", { team: "IRN", quarter: 3, sound: true, diff: 1 });
+let SETTINGS = Store.read("settings",
+  { team: "IRN", quarter: 3, sound: true, diff: 1, driveRight: false });
 let RECORD = Store.read("record", { played: 0, won: 0, lost: 0, tied: 0, best: 0, longestTD: 0 });
 const saveSettings = () => Store.write("settings", SETTINGS);
 const saveRecord = () => Store.write("record", RECORD);
@@ -606,9 +607,14 @@ const saveRecord = () => Store.write("record", RECORD);
 // changes how fast anyone runs. A rubber-banded speed boost is the thing
 // that makes an arcade sports game feel like it is cheating.
 const DIFFS = [
-  { name: "ROOKIE",  read: 0.45, react: 1.55 },
-  { name: "PRO",     read: 0.72, react: 1.00 },
-  { name: "ALL-PRO", read: 0.90, react: 0.72 },
+  // read   how often they call the right front for the situation
+  // react  reaction lag multiplier; below 1 is faster
+  // cover  how hard a defender in position makes the catch
+  // learn  how strongly they notice what you keep calling
+  // drive  a thumb on the scale of their own simulated possession
+  { name: "ROOKIE",  read: 0.5,  react: 1.3,  cover: 0.85, learn: 0.6,  drive: 0.0 },
+  { name: "PRO",     read: 0.72, react: 1.00, cover: 1.0,  learn: 0.62, drive: 0.05 },
+  { name: "ALL-PRO", read: 0.90, react: 0.72, cover: 1.25, learn: 0.92, drive: 0.11 },
 ];
 
 /* ===================================================================
@@ -849,14 +855,37 @@ const SCHEMES = [
   },
 ];
 
+// What you have been calling lately, decayed so it is a recent memory rather
+// than a season average. Without this you could call the same play every snap
+// for a whole game and never once be answered for it — which is exactly what a
+// person does the moment they find something that works.
+function noteTendency(kind) {
+  const t = G.st.tend;
+  t.run *= 0.82; t.pass *= 0.82;
+  if (kind === "run") t.run += 1; else t.pass += 1;
+}
+
 function callScheme(state, rng) {
   const diff = DIFFS[SETTINGS.diff];
-  if (!rng.chance(diff.read)) return rng.pick(SCHEMES);
   const toGo = state.toGo, toGoal = FIELD.oppGoal - state.los;
+  // The situations nobody misreads, whatever their grade.
   if (toGoal <= 5) return SCHEMES[4];
   if (state.q >= 4 && state.clock < 100 && state.them > state.us) return SCHEMES[3];
   if (toGo <= 2) return rng.chance(0.6) ? SCHEMES[4] : SCHEMES[0];
   if (state.down >= 3 && toGo >= 7) return rng.chance(0.5) ? SCHEMES[1] : SCHEMES[2];
+
+  // Playing the man comes before playing the situation, and before the
+  // competence roll: even a poor defence eventually notices you have run the
+  // same thing eight snaps running. The thresholds are deliberately lopsided —
+  // this answers a player who has stopped mixing, not one who is 60/40 run.
+  const t = G.st.tend, seen = t.run + t.pass;
+  if (seen > 2.5 && rng.chance(diff.learn)) {
+    const runShare = t.run / seen;
+    if (runShare > 0.68) return rng.chance(0.6) ? SCHEMES[0] : SCHEMES[4];    // base / goal line
+    if (runShare < 0.22) return rng.chance(0.55) ? SCHEMES[2] : SCHEMES[1];   // cover 2 / blitz
+  }
+
+  if (!rng.chance(diff.read)) return rng.pick(SCHEMES);
   const roll = rng.unit();
   if (roll < 0.36) return SCHEMES[0];
   if (roll < 0.62) return SCHEMES[2];
@@ -968,6 +997,10 @@ function makePlay(o) {
     return s;
   }
 
+  // Who may legally catch a forward pass. Linemen may not, and neither may the
+  // man who threw it.
+  const eligible = p => p.side === "off" && p.pos !== "OL" && p.idx !== 0;
+
   // Eligible targets, for the receiver markers and for the aim assist.
   // A lineman released on a screen is a blocker, not a target — he has the
   // hands of a lineman and throwing to him is never what you meant.
@@ -1030,7 +1063,13 @@ function makePlay(o) {
       if (d <= CFG.catchR) near.push({ p, d });
     }
     near.sort((a, c) => a.d - c.d);
-    const off = near.find(n => n.p.side === "off");
+    // Only an eligible receiver can catch it. `arrive` used to take the nearest
+    // man in an offensive shirt, so a guard standing in the way of a throw over
+    // the middle caught it — nineteen percent of completions on a thumb-aimed
+    // pass were made by a lineman, which is what "anyone touching the ball
+    // counts as a catch" looks like from the outside. An ineligible man in the
+    // area is now simply not there as far as the ball is concerned.
+    const off = near.find(n => n.p.side === "off" && eligible(n.p));
     const def = near.find(n => n.p.side === "def");
 
     if (!off && !def) return end("incomplete", b.tx, b.ty, "INCOMPLETE");
@@ -1058,7 +1097,8 @@ function makePlay(o) {
 
     let odds = CFG.catchBase + (off.p.r.hnd - 50) * CFG.catchRating;
     odds -= clamp((air - CFG.deepFree) * CFG.deepFade, 0, CFG.deepFadeMax);
-    if (def) odds -= clamp(edge + 0.35, 0, 1.75) * (CFG.contestFade + (def.p.r.cov - 50) * 0.003);
+    if (def) odds -= clamp(edge + 0.35, 0, 1.75)
+                   * (CFG.contestFade * DIFFS[SETTINGS.diff].cover + (def.p.r.cov - 50) * 0.003);
     if (rng.chance(clamp(odds, 0.06, 0.97))) {
       off.p.hasBall = true; off.p.x = b.tx; off.p.y = b.ty;
       S.ball = { state: "held", who: off.p.id, x: b.tx, y: b.ty, h: 0 };
@@ -1242,6 +1282,12 @@ function makePlay(o) {
     for (let i = 0; i < 3; i++) t = Math.hypot(rx + c.vx * t, ry + c.vy * t) / Math.max(1, sp);
     t = Math.min(t, CFG.pursueLead) * react;
     setWant(p, rx + c.vx * t, ry + c.vy * t);
+    // Chase him flat out. `sprint` was only ever set by `carrierAI` and by the
+    // thumb, so every ball carrier in the game was permanently 14% faster than
+    // every man pursuing him AND nine points harder to bring down — which is
+    // why a back who cleared the front was simply never caught, and why a dive
+    // averaged twenty yards against an empty box.
+    p.sprint = true;
   }
 
   function blockTarget(p, aimX, aimY) {
@@ -1748,6 +1794,7 @@ function newGame(myAb, oppAb) {
       them: { plays: 0, yards: 0, first: 0, pass: 0, rush: 0, td: 0, to: 0, comp: 0, att: 0 },
     },
     longestTD: 0,
+    tend: { run: 0, pass: 0 },   // what you have been calling lately
     log: [],
   };
   // Whoever wins the toss starts at their own 25.
@@ -1834,7 +1881,9 @@ function applyResult(res) {
   st.plays++;
   if (res.pass) { st.att++; if (res.complete) { st.comp++; st.pass += res.yards; } }
   else if (res.kind !== "sack") st.rush += res.yards;
-  if (res.kind !== "incomplete") st.yards += Math.max(0, res.yards);
+  // Net yards. This used to floor every play at zero, so a nine-yard sack cost
+  // nothing on the stat sheet and the total on the final screen flattered you.
+  if (res.kind !== "incomplete") st.yards += res.yards;
 
   const quarterOver = burn(res.elapsed + CFG.huddle);
 
@@ -1979,7 +2028,7 @@ function startTheirDrive(startY, afterTheirScore = false) {
 function simulateTheirDrive() {
   const s = G.st, d = s.drive, rng = RNG;
   const edge = (s.opp.str - s.my.str) * 0.012;      // their quality against yours
-  const diffBonus = (SETTINGS.diff - 1) * 0.03;
+  const diffBonus = DIFFS[SETTINGS.diff].drive;
   let los = s.los, down = 1, toGo = 10, guard = 0;
 
   const toGoal = () => los - FIELD.ownGoal;
@@ -2091,6 +2140,7 @@ function finishTheirDrive() {
 function snapPlay(play) {
   const s = G.st;
   s.chosen = play;
+  noteTendency(play.kind);
   s.scheme = callScheme({ down: s.down, toGo: s.toGo, los: s.los, q: s.q,
                           clock: s.clock, us: s.us, them: s.them }, RNG);
   fxReset();
@@ -2216,7 +2266,7 @@ function panel(x, y, w, h, fill = COL.panel, edge = COL.edge) {
 
 /* ---- the field, baked once --------------------------------------- */
 function buildField() {
-  const key = G.st.my.ab + G.st.opp.ab + "|" + VIEWH + "|" + UNIT;
+  const key = G.st.my.ab + G.st.opp.ab + "|" + VIEWH + "|" + UNIT + "|" + driveRight();
   if (fieldKey === key) return;
   fieldKey = key;
 
@@ -2233,9 +2283,7 @@ function buildField() {
     g.fillRect(Math.round(x * UNIT), Math.round(y * UNIT),
                Math.max(UNIT, Math.round(ww * UNIT)), Math.max(UNIT, Math.round(hh * UNIT)));
   };
-  // You drive RIGHT TO LEFT. This line and `scrX` are the only two places that
-  // decide that; everything upstream still counts yards the same way.
-  const X = fy => (FIELD.L + FIELD_MARGIN - fy) * PPY;
+  const X = fieldX;
   // Anything spanning two yard lines has to be expressed as a pair of ends,
   // not an origin and a width — the width changes sign when the field flips.
   const band = (fyA, fyB, y, hh, c) => {
@@ -2249,7 +2297,7 @@ function buildField() {
   for (let y = FIELD.ownGoal; y < FIELD.oppGoal; y += 10)
     band(y + 5, y + 10, 0, h, COL.mow);
 
-  // End zones: theirs on the left, yours on the right, because you drive left.
+  // Your end zone sits behind you and theirs in front, whichever way that is.
   band(0, FIELD.ownGoal, 0, h, G.st.my.jersey);
   band(FIELD.oppGoal, FIELD.L, 0, h, G.st.opp.jersey);
 
@@ -2265,8 +2313,8 @@ function buildField() {
                 -dw * UNIT / 2, -dh * UNIT / 2, dw * UNIT, dh * UNIT);
     g.restore();
   };
-  nameFor(G.st.my, X(FIELD.ownGoal / 2), false);
-  nameFor(G.st.opp, X(FIELD.oppGoal + FIELD.EZ / 2), true);
+  nameFor(G.st.my, X(FIELD.ownGoal / 2), driveRight());
+  nameFor(G.st.opp, X(FIELD.oppGoal + FIELD.EZ / 2), !driveRight());
 
   const thick = Math.max(1, Math.round(PPY * 0.24));
   for (let y = FIELD.ownGoal; y <= FIELD.oppGoal + 0.01; y += 5) {
@@ -2304,7 +2352,8 @@ function buildField() {
     const gx = X(backY);
     const top = Y(FIELD.midY + FIELD.uprightHalf), bot = Y(FIELD.midY - FIELD.uprightHalf);
     R(gx - 1, top, 2, bot - top, COL.chalk);
-    const stub = backY === 0 ? -4 : 2;
+    // The crossbar stubs point back into the field of play.
+    const stub = (backY === 0) === driveRight() ? 2 : -4;
     R(gx + stub, top - 1, 4, 2, COL.goalpost || "#E8C63A");
     R(gx + stub, bot - 1, 4, 2, COL.goalpost || "#E8C63A");
   }
@@ -2313,6 +2362,20 @@ function buildField() {
 /* ---- camera ------------------------------------------------------ */
 const FIELD_MARGIN = 9;      // yards of turf drawn beyond each back line
 let camX = 0, camY = 0;
+
+/* ---- which way you attack ------------------------------------------
+   The simulation always counts yards the same way: y = 110 is the end
+   zone you are attacking, whatever the screen is doing. This function,
+   `scrX`, and the input handler are the only things that know which way
+   that points on a display — which is what makes the setting a one-line
+   change rather than a rewrite.
+   ------------------------------------------------------------------ */
+const driveRight = () => !!SETTINGS.driveRight;
+const fieldX = fy => (driveRight() ? fy + FIELD_MARGIN
+                                   : FIELD.L + FIELD_MARGIN - fy) * PPY;
+// The inverse: what yard line is under this screen column.
+const fyAtScreen = px => driveRight() ? (camX + px) / PPY - FIELD_MARGIN
+                                      : FIELD.L + FIELD_MARGIN - (camX + px) / PPY;
 function focusY() {
   const s = G.st;
   // On a kick, sit between the tee and the posts so you can see what you are
@@ -2334,12 +2397,13 @@ function focusX() {
 function updateCamera(dt, snap) {
   const fieldW = (FIELD.L + FIELD_MARGIN * 2) * PPY;
   const fieldH = FIELD.W * PPY;
-  // Downfield is to the LEFT, so the ball sits right of centre and you see
-  // where you are going. On a turnover the play is running the other way, so
-  // the bias flips with it — otherwise the return you are chasing happens in
-  // the narrow strip of screen behind the ball.
-  const lead = (G.play && G.play.turnover) ? 0.38 : 0.62;
-  const tx = clamp((FIELD.L + FIELD_MARGIN - focusY()) * PPY - ARTW * lead,
+  // The ball sits behind the action so you can see where you are going. On a
+  // turnover the play is running the other way, so the bias flips with it —
+  // otherwise the return you are chasing happens in the narrow strip of screen
+  // behind the ball. Attacking rightward mirrors the whole thing.
+  let lead = (G.play && G.play.turnover) ? 0.38 : 0.62;
+  if (driveRight()) lead = 1 - lead;
+  const tx = clamp(fieldX(focusY()) - ARTW * lead,
                    0, Math.max(0, fieldW - ARTW));
   const ty = clamp((FIELD.W - focusX()) * PPY - VIEWH * 0.5,
                    0, Math.max(0, fieldH - VIEWH));
@@ -2350,7 +2414,7 @@ function updateCamera(dt, snap) {
   camY += (ty - camY) * (1 - Math.pow(0.02, dt));
 }
 // Field point → screen. These two are the entire rotation.
-const scrX = fy => (FIELD.L + FIELD_MARGIN - fy) * PPY - camX;
+const scrX = fy => fieldX(fy) - camX;
 const scrY = fx => VIEWTOP + (FIELD.W - fx) * PPY - camY;
 
 /* ---- effects ------------------------------------------------------
@@ -2495,7 +2559,9 @@ function drawPlayers(dt) {
     ctx.fillStyle = COL.shadow;
     ctx.fillRect(D(cxA - 4), D(cyA - 1.5), D(8), D(3));
 
-    const faceLeft = Math.sin(p.face) > 0;   // +downfield is screen-left
+    // sin(face) is the downfield component, and downfield is screen-left only
+    // when you are attacking that way.
+    const faceLeft = driveRight() ? Math.sin(p.face) < 0 : Math.sin(p.face) > 0;
     const dx = D(cxA - sp.w / 2), dy = D(cyA - sp.h + 2);
     if (faceLeft) {
       ctx.save();
@@ -2627,11 +2693,18 @@ const hitTest = (x, y) => HOT.find(b => x >= b.x && x <= b.x + b.w && y >= b.y &
    ------------------------------------------------------------------ */
 function drawRouteDiagram(play, x, y, w, h, accent) {
   rect(x, y, w, h, COL.turfDark);
-  const losX = x + Math.round(w * 0.26);
+  // The card faces the same way the field does, so a route that breaks left on
+  // the sheet breaks left on the grass.
+  const R = driveRight();
+  const losX = x + Math.round(w * (R ? 0.26 : 0.74));
   rect(losX, y + 1, 1, h - 2, "#4A6B52");
 
   const DEPTH = 26, SPAN = 30;
-  const px = fy => losX + (fy / DEPTH) * (x + w - 2 - losX);
+  const far = R ? x + w - 2 : x + 2;
+  // A route deeper than the card is drawn to the edge, not off it — VERTS runs
+  // thirty yards and the card only shows twenty-six.
+  const px = fy => clamp(losX + (fy / DEPTH) * (far - losX),
+                         Math.min(x + 2, far), Math.max(x + w - 2, far));
   const py = lat => y + h / 2 - (lat / SPAN) * (h - 4);
 
   const trail = (ax, ay, bx, by, col) => {
@@ -2843,18 +2916,22 @@ function drawDefense() {
   // one you had been playing on all drive — which reads as the whole game
   // turning around.
   const bx = x0 + 12, bw = w - 24, by = y0 + 22;
-  const barX = y => bx + bw * clamp(1 - y / FIELD.L, 0, 1);
+  const R = driveRight();
+  const barX = y => bx + bw * clamp(R ? y / FIELD.L : 1 - y / FIELD.L, 0, 1);
   const ez = bw * (FIELD.EZ / FIELD.L);
   rect(bx, by, bw, 8, COL.turfDark);
-  rect(bx, by, ez, 8, s.opp.jersey);              // their end zone, far left
-  rect(bx + bw - ez, by, ez, 8, s.my.jersey);     // yours, far right
+  rect(R ? bx : bx + bw - ez, by, ez, 8, s.my.jersey);    // yours, behind you
+  rect(R ? bx + bw - ez : bx, by, ez, 8, s.opp.jersey);   // theirs, ahead
   const mx = barX(s.los);
   rect(mx - 1, by - 3, 2, 14, COL.flood);
   // A chevron off the marker, pointing the way they are coming — at you.
-  for (let i = 0; i < 4; i++) rect(mx + 2 + i, by + i, 1, 8 - i * 2, COL.flood);
-  text(s.opp.ab + " GOAL", bx, by + 13, { align: -1, color: COL.dim, shadow: false });
+  for (let i = 0; i < 4; i++)
+    rect(mx + (R ? -2 - i : 2 + i), by + i, 1, 8 - i * 2, COL.flood);
+  const goalL = R ? "YOUR GOAL" : s.opp.ab + " GOAL";
+  const goalR = R ? s.opp.ab + " GOAL" : "YOUR GOAL";
+  text(goalL, bx, by + 13, { align: -1, color: COL.dim, shadow: false });
   text(fieldLabel(s.los, false), x0 + w / 2, by + 13, { color: COL.ink, shadow: false });
-  text("YOUR GOAL", bx + bw, by + 13, { align: 1, color: COL.dim, shadow: false });
+  text(goalR, bx + bw, by + 13, { align: 1, color: COL.dim, shadow: false });
 
   const lines = s.log.slice(-3);
   lines.forEach((l, i) => {
@@ -2882,6 +2959,8 @@ function drawTitle() {
   by += 36;
   button("diff", bx, by, bw, 20, "DIFFICULTY  " + DIFFS[SETTINGS.diff].name); by += 26;
   button("qlen", bx, by, bw, 20, "QUARTER  " + SETTINGS.quarter + " MIN"); by += 26;
+  button("dir", bx, by, bw, 20,
+         "YOU ATTACK  " + (SETTINGS.driveRight ? "RIGHT" : "LEFT")); by += 26;
   button("sfx", bx, by, bw, 20, "SOUND  " + (SETTINGS.sound ? "ON" : "OFF"));
 
   const rec = RECORD.played
@@ -3024,17 +3103,18 @@ function onMove(e) {
   if (SCREEN !== "game" || G.st.phase !== "live" || !sim || sim.over) return;
 
   if (Input.aim && sim.qbHasIt() && !sim.tucked) {
-    // Screen LEFT is downfield; screen up is across the field.
-    const dAlong = -(p.x - Input.sx) / PPY * CFG.aimGain;
+    // Dragging back from the way you attack pushes the cursor downfield; screen
+    // up is across the field either way.
+    const dAlong = (driveRight() ? 1 : -1) * (p.x - Input.sx) / PPY * CFG.aimGain;
     const dAcross = -(p.y - Input.sy) / PPY * CFG.aimGain;
     const qb = sim.P[0];
     let ay = clamp(Input.aimFrom.y + dAlong, qb.y - 4, qb.y + CFG.maxThrow);
     let ax = clamp(Input.aimFrom.x + dAcross, 1.5, FIELD.W - 1.5);
     // A target you cannot see is not a target: keep the cursor on screen, on
     // both axes now that the camera pans across the field too.
-    const deepFy = FIELD.L + FIELD_MARGIN - (camX + 16) / PPY;
-    const shortFy = FIELD.L + FIELD_MARGIN - (camX + ARTW - 16) / PPY;
-    ay = clamp(ay, Math.max(0.8, shortFy), Math.min(FIELD.L - 0.8, deepFy));
+    const edgeA = fyAtScreen(16), edgeB = fyAtScreen(ARTW - 16);
+    ay = clamp(ay, Math.max(0.8, Math.min(edgeA, edgeB)),
+                   Math.min(FIELD.L - 0.8, Math.max(edgeA, edgeB)));
     const topFx = FIELD.W - (camY + 12) / PPY;
     const botFx = FIELD.W - (camY + VIEWH - 12) / PPY;
     ax = clamp(ax, Math.max(0.8, botFx), Math.min(FIELD.W - 0.8, topFx));
@@ -3045,8 +3125,8 @@ function onMove(e) {
   const ddx = p.x - Input.sx, ddy = p.y - Input.sy;
   const len = Math.hypot(ddx, ddy);
   if (len < 4) { Input.steerX = 0; Input.steerY = 0; return; }
-  Input.steerY = -ddx / len;     // screen left → downfield
-  Input.steerX = -ddy / len;     // screen up   → across
+  Input.steerY = (driveRight() ? ddx : -ddx) / len;   // toward your end zone
+  Input.steerX = -ddy / len;                          // screen up → across
   Input.sprint = len > 26;
 }
 
@@ -3096,6 +3176,7 @@ function handleTap(id) {
     if (id === "start") { PICK = { forOpponent: false, mine: null }; SCREEN = "teams"; }
     else if (id === "diff") { SETTINGS.diff = (SETTINGS.diff + 1) % DIFFS.length; saveSettings(); }
     else if (id === "qlen") { const o = [2, 3, 5, 8]; SETTINGS.quarter = o[(o.indexOf(SETTINGS.quarter) + 1) % o.length]; saveSettings(); }
+    else if (id === "dir") { SETTINGS.driveRight = !SETTINGS.driveRight; fieldKey = ""; saveSettings(); }
     else if (id === "sfx") { SETTINGS.sound = !SETTINGS.sound; Sound.enabled = SETTINGS.sound; saveSettings(); }
     return;
   }

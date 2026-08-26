@@ -1,7 +1,8 @@
 # PIXEL BOWL
 
 A one-thumb pixel football game for a phone. **Turn the phone sideways** — the
-field runs left to right and you drive toward the **left-hand** end zone.
+field runs left to right and you drive toward the **left-hand** end zone, or the
+right-hand one if you'd rather (title screen → YOU ATTACK).
 Offense only, drag to aim and release to throw.
 
 Runs in mobile Safari with no App Store, no Xcode and no Mac. One HTML file,
@@ -82,12 +83,19 @@ The game's own source is loaded under a DOM stub and driven exactly as the
 browser drives it, so the tests exercise shipping code rather than a copy.
 
 ```bash
-node tools/test.js        # 91 checks: termination, determinism, rules, balance
+node tools/test.js        # 95 checks: termination, determinism, rules, balance
+node tools/skill.js       # the same games played by four different standards of thumb
 node tools/balance.js     # plays whole games, reports the numbers you'd feel
 node tools/drives.js      # where possessions start and what they produce
 node tools/plays.js       # a few hundred snaps of each play, low variance
 npm i && node tools/shots.js   # renders it in Chromium and screenshots every screen
 ```
+
+`tools/skill.js` exists because one scripted player tells you nothing about the
+*ceiling*, and the ceiling is what someone who has played fifty games actually
+meets. It runs four standards of thumb, including DIVER — a player who found one
+play that works and stopped looking. If the defence never answers that, the game
+has no ceiling at all, and the scoreboard says so.
 
 `tools/drives.js` and `tools/plays.js` exist because whole-game averages hid
 the two worst bugs in this thing. Thirty games give about eighty carries — far
@@ -114,23 +122,29 @@ form an Artifact accepts, so there is one source of truth.
 
 ## Where it stands
 
-Measured over 14 full games with a scripted competent player, against the real
-thing in brackets:
+Per snap, sampled over a few thousand plays, against the real thing in brackets:
 
-| | ROOKIE | PRO | ALL-PRO | (NFL) |
-|---|---|---|---|---|
-| Score | 23–12 | 19–14 | 19–14 | 23–23 |
-| Plays | 27 | 26 | 25 | 63 |
-| Yards per play | 9.8 | 9.2 | 9.7 | 5.5 |
-| First downs | 7.5 | 6.9 | 5.4 | 20 |
-| Completions | 55% | 54% | 52% | 65% |
-| Turnovers | 1.4 | 1.4 | 1.4 | 1.3 |
+| | Pixel Bowl | (NFL) |
+|---|---|---|
+| Yards per carry | 4.4 | 4.3 |
+| Yards per completion | 12.1 | 11.5 |
+| — of which after the catch | 4.6 | 5.0 |
+| Completions 35 yards or longer | 5% | 4% |
+| Completion rate | 68% | 65% |
+| Interception rate | 3.3% | 2.3% |
 
-Per-snap, sampled over a few thousand plays: runs average 5.3 yards,
-completions 17.8 (12.7 in the air plus 5.0 after the catch, against a real 5.0),
-and 2.8% of throws are intercepted against a real 2.3%. Play counts are low and
-yards per play high because a quarter is three minutes, not fifteen — the game
-is a highlight reel of a game, not a game.
+Whole games, as **average margin** by how well the game is played (`tools/skill.js`,
+twelve games a cell — small enough that these move a few points run to run):
+
+| | ROOKIE | PRO | ALL-PRO |
+|---|---|---|---|
+| Ordinary | +19 | +2 | +4 |
+| Careful | +14 | +5 | 0 |
+| Sharp | +10 | +2 | −4 |
+| One play, over and over | +19 | −1 | −7 |
+
+Play counts are low and yards per play high because a quarter is three minutes,
+not fifteen — the game is a highlight reel of a game, not a game.
 
 ### What a 72–2 scoreline was actually made of
 
@@ -155,6 +169,38 @@ Four separate things, in rough order of blame:
    diagnoses a run that fast — the box now reads it in 0.3s and the secondary in
    0.7s, and that half-second is the only reason a crease ever exists. Carries
    average 5.3 yards now.
+
+### Why it played like a blowout every week
+
+A second round of playtesting came back "I win every game by 40+", and the cause
+was three things stacked:
+
+1. **Anyone in an offensive shirt could catch a forward pass.** `arrive` took the
+   nearest man on your side of the ball, so a guard standing in the way of a
+   throw over the middle caught it — nineteen percent of completions on a
+   thumb-aimed pass were made by a lineman. Only eligible receivers can catch it
+   now.
+
+2. **Nobody on defence ever sprinted.** `sprint` was set by the ball carrier's AI
+   and by your thumb, and by nothing else. So every ball carrier in the game was
+   permanently 14% faster than every man pursuing him *and* nine points harder to
+   bring down. A back who cleared the front was simply never caught: DIVE
+   averaged 10 to 23 yards a carry against every front but goal line. It now
+   averages 4.4, and no carry in a sample of nine hundred went past twenty yards
+   untouched.
+
+3. **The defence never noticed what you kept calling.** Fronts were chosen from
+   down and distance alone, so you could run the same play forty times in a game
+   and never once be answered for it — which is exactly what a person does the
+   moment they find something that works. It now keeps a decaying memory of your
+   run/pass split and answers a one-sided one, hard at ALL-PRO and lazily at
+   ROOKIE. `tools/skill.js` measures this directly with a player who calls DIVE
+   and nothing else: that player went from +34 a game on PRO to about even.
+
+Difficulty also does more than it used to. It was two numbers — how often the
+CPU called the right front, and a reaction lag. It now also sets how hard a
+defender in position makes a catch, how quickly they read your tendencies, and
+how well their own possession goes.
 
 ### Two bugs that were control, not simulation
 

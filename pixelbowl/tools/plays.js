@@ -23,7 +23,7 @@ function runPlay(play, scheme, seed, los) {
   });
   sim.snap();
   const H = 1 / 60;
-  let t = 0, catchY = null;
+  let t = 0, catchY = null, catcher = null;
   while (!sim.over && t < 40) {
     let inp = { steerX: 0, steerY: 0, sprint: true };
     if (play.kind === "pass" && sim.qbHasIt() && !sim.threw && t > play.develop) {
@@ -58,23 +58,24 @@ function runPlay(play, scheme, seed, los) {
     sim.step(H, inp);
     if (sim.completed && catchY == null) {
       const c = sim.P.find(p => p.hasBall);
-      if (c) catchY = c.y;
+      if (c) { catchY = c.y; catcher = c.pos; }
     }
     t += H;
   }
-  return { r: sim.result, catchY };
+  return { r: sim.result, catchY, catcher };
 }
 
 const pct = (v, n) => (v / Math.max(1, n) * 100).toFixed(0) + "%";
 const stat = { run: [], pass: [], air: [], yac: [] };
-const byScheme = {}, byPlay = {}, why = {};
+const byScheme = {}, byPlay = {}, why = {}, byPos = {}, cross = {};
 const tally = { att: 0, comp: 0, inc: 0, sack: 0, to: 0, td: 0, carries: 0 };
 
 for (const play of PLAYS) {
   for (let i = 0; i < N; i++) {
     const scheme = SCHEMES[i % SCHEMES.length];
     const los = [22, 40, 58, 76][i % 4];
-    const { r, catchY } = runPlay(play, scheme, i * 31 + 7, los);
+    const { r, catchY, catcher } = runPlay(play, scheme, i * 31 + 7, los);
+    if (catcher) byPos[catcher] = (byPos[catcher] || 0) + 1;
     if (!r) continue;
     if (r.kind === "td") tally.td++;
     if (r.kind.startsWith("int") || r.kind.startsWith("fumble")) { tally.to++; if (play.kind === "pass") tally.att++; continue; }
@@ -85,7 +86,8 @@ for (const play of PLAYS) {
       tally.comp++;
       stat.pass.push(r.yards);
       if (catchY != null) { stat.air.push(catchY - los); stat.yac.push(r.y - catchY); }
-    } else { tally.carries++; stat.run.push(r.yards); (byScheme[scheme.name] = byScheme[scheme.name] || []).push(r.yards); (byPlay[play.name] = byPlay[play.name] || []).push(r.yards); }
+    } else { tally.carries++; stat.run.push(r.yards); (byScheme[scheme.name] = byScheme[scheme.name] || []).push(r.yards); (byPlay[play.name] = byPlay[play.name] || []).push(r.yards);
+      (cross[play.name + " vs " + scheme.name] = cross[play.name + " vs " + scheme.name] || []).push(r.yards); }
   }
 }
 
@@ -102,5 +104,10 @@ console.log(`       air ${mean(stat.air).toFixed(1)} + yac ${mean(stat.yac).toFi
 console.log(`passing ${tally.comp}/${tally.att} = ${pct(tally.comp, tally.att)}   sacks ${pct(tally.sack, tally.att)}   turnovers ${tally.to}`);
 console.log("runs by front: " + Object.entries(byScheme).map(([k, v]) => `${k} ${mean(v).toFixed(1)}`).join("  "));
 console.log("runs by play:  " + Object.entries(byPlay).map(([k, v]) => `${k} ${mean(v).toFixed(1)}`).join("  "));
+console.log("caught by: " + Object.entries(byPos).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join("  "));
 console.log("incompletions: " + Object.entries(why).map(([k, v]) => `${k} ${v}`).join("  "));
+if (process.env.CROSS) {
+  console.log("run play x front:");
+  for (const [k, v] of Object.entries(cross)) console.log(`   ${k.padEnd(24)} ${mean(v).toFixed(1).padStart(6)}  (n=${v.length})`);
+}
 console.log(`NFL for reference: runs 4.3 (<0 12%, 20+ 4%)  comps 11.5 (air 7 + yac 5, 35+ 4%)  comp% 65  sack% 7`);
