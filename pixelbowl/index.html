@@ -194,11 +194,13 @@ const CFG = {
   // traffic cone.
   blockedReach: 0.8,
   blockedTackle: 0.55,
-  tackleBase: 0.52,
+  tackleBase: 0.62,
   tackleRating: 0.0055,
   breakSlow: 0.55, breakSlowTime: 0.35,
   stumbleTime: 0.7,
-  maxBreaks: 3,
+  // Two broken tackles is already generous; three let a receiver walk through
+  // the whole secondary and was most of nine yards after the catch.
+  maxBreaks: 2,
   goalLineSurge: 0.26,
   fumbleBase: 0.018,
   // A beat to secure the ball after a turnover before anyone can make the
@@ -216,18 +218,26 @@ const CFG = {
 
   // Passing. The ball is thrown at a POINT you choose, not at a receiver —
   // leading the throw is the skill, and it is what makes one thumb enough.
+  // How a throw fades with distance: free out to `deepFree` yards of flight,
+  // then losing `deepFade` of catch probability per yard, capped.
+  deepFree: 11, deepFade: 0.0135, deepFadeMax: 0.46,
   passSpeed: 19,
   passArc: 0.16, passArcMax: 5,
   catchR: 1.7,
   catchBase: 0.90,
   catchRating: 0.004,
   pickShare: 0.15,
+  contestFade: 0.45,     // catch odds lost to a defender with position
   scatterBase: 1.4,
   scatterPressure: 2.4,
   pressureR: 2.0,
   throwWind: 0.16,
   maxThrow: 60,          // yards, cursor reach from the quarterback
   carrierAvoid: 6,       // yards a runner "feels" traffic inside
+  pursueLead: 1.5,       // seconds of intercept lead a defender may aim at
+  // How long it takes to diagnose a run: the box reacts almost at once, the
+  // secondary has to respect the pass first.
+  runReadFront: 0.3, runReadDeep: 0.7,
 
   // Kicking.
   kickRangeMin: 36, kickRangeMax: 60,
@@ -830,8 +840,11 @@ const SCHEMES = [
     id: "goalline", name: "GOAL LINE",
     align: [{ x: -3, y: 1 }, { x: 3, y: 1 }, { x: -6, y: 3 }, { x: 6, y: 3 },
             { x: -10, y: 5 }, { x: 10, y: 5 }, { x: 0, y: 7 }],
+    // Three men filling the same crease meant a short-yardage carry was a
+    // guaranteed loss — you could not convert fourth and one at all. The
+    // middle man plays a shallow zone instead: still stingy, no longer a wall.
     jobs: [{ t: "rush" }, { t: "rush" }, { t: "fill", bias: -1 }, { t: "fill", bias: 1 },
-           { t: "man", i: 2 }, { t: "man", i: 3 }, { t: "fill", bias: 0 }],
+           { t: "man", i: 2 }, { t: "man", i: 3 }, { t: "zone", x: 0, y: 6, r: 9 }],
     vsRun: 0.92, vsPass: 0.30,
   },
 ];
@@ -921,6 +934,7 @@ function makePlay(o) {
     handoffAt: play.kind === "run" ? 0.3 : -1,
     handoffDone: false,
     threw: false, completed: false,
+    runT: null,               // when the defence first had a runner to chase
     graceUntil: 0,
     windup: -1, windupTo: null,
     shake: 0,
@@ -1019,16 +1033,33 @@ function makePlay(o) {
     const off = near.find(n => n.p.side === "off");
     const def = near.find(n => n.p.side === "def");
 
-    if (def && (!off || def.d < off.d)) {
-      let pick = CFG.pickShare + ((def.p.r.hnd + def.p.r.cov) / 2 - 50) * 0.004;
-      if (rng.chance(clamp(pick, 0.03, 0.45))) return intercept(def.p);
-      return end("incomplete", b.tx, b.ty, "BROKEN UP");
+    if (!off && !def) return end("incomplete", b.tx, b.ty, "INCOMPLETE");
+
+    // A ball in the air is contested, not adjudicated. This used to be a hard
+    // branch — a defender one inch closer than the receiver killed the pass
+    // outright — and once the coverage started taking proper pursuit angles
+    // that fired on a quarter of every attempt. Now position is a penalty on
+    // the catch, not a verdict. `edge` is how much better placed the defender
+    // is, measured in catch radii: negative means the receiver has him beaten.
+    const edge = def ? clamp(((off ? off.d : CFG.catchR * 1.6) - def.d) / CFG.catchR, -1, 1.4) : -1;
+    // Distance costs accuracy. Nothing here used to care how far the ball had
+    // flown, so a 45-yard bomb was caught as often as a checkdown in the flat
+    // — a third of every completion went for 35 yards or more, and the game
+    // scored in the seventies. Deep balls now come down like deep balls do.
+    const air = dist(b.fx, b.fy, b.tx, b.ty);
+
+    if (def) {
+      // Only a defender who actually has position gets a real shot at it.
+      const pick = (CFG.pickShare + ((def.p.r.hnd + def.p.r.cov) / 2 - 50) * 0.004)
+                 * clamp(0.15 + edge, 0, 1.4);
+      if (rng.chance(clamp(pick, 0, 0.45))) return intercept(def.p);
     }
-    if (!off) return end("incomplete", b.tx, b.ty, "INCOMPLETE");
+    if (!off) return end("incomplete", b.tx, b.ty, "BROKEN UP");
 
     let odds = CFG.catchBase + (off.p.r.hnd - 50) * CFG.catchRating;
-    if (def) odds -= clamp(1 - def.d / (CFG.catchR * 1.7), 0, 1) * (0.2 + (def.p.r.cov - 50) * 0.003);
-    if (rng.chance(clamp(odds, 0.12, 0.99))) {
+    odds -= clamp((air - CFG.deepFree) * CFG.deepFade, 0, CFG.deepFadeMax);
+    if (def) odds -= clamp(edge + 0.35, 0, 1.75) * (CFG.contestFade + (def.p.r.cov - 50) * 0.003);
+    if (rng.chance(clamp(odds, 0.06, 0.97))) {
       off.p.hasBall = true; off.p.x = b.tx; off.p.y = b.ty;
       S.ball = { state: "held", who: off.p.id, x: b.tx, y: b.ty, h: 0 };
       S.completed = true;
@@ -1037,9 +1068,9 @@ function makePlay(o) {
       P.forEach(p => { if (p.side === "off" && p !== off.p && (p.job.t === "route" || p.job.t === "delay")) p.job = { t: "block", bias: 0 }; });
       return;
     }
-    if (def && def.d < CFG.catchR * 0.8 && rng.chance(CFG.pickShare * 0.4)) return intercept(def.p);
     Sound.miss();
-    end("incomplete", b.tx, b.ty, off.d < 0.8 ? "DROPPED" : "INCOMPLETE");
+    end("incomplete", b.tx, b.ty,
+        def && edge > -0.15 ? "BROKEN UP" : off.d < 0.8 ? "DROPPED" : "INCOMPLETE");
   }
 
   function intercept(d) {
@@ -1175,6 +1206,18 @@ function makePlay(o) {
 
   // Once the ball is a runner or on the floor, every defender abandons his
   // drop and takes an angle. Before that, zones honour their landmarks.
+  // Nobody diagnoses a run at the snap. The front seven fit it almost at once;
+  // the secondary honours the pass first, and that half-second is the only
+  // reason a crease ever exists. Without it all eleven converged from frame
+  // one with perfect angles and the run game averaged 0.7 yards a carry.
+  function readsRun(p) {
+    if (S.turnover || S.ball.state === "loose" || S.threw || S.completed) return true;
+    const deep = p.job.t === "man" || p.job.t === "zone";
+    const delay = (deep ? CFG.runReadDeep : CFG.runReadFront)
+                * clamp(1.35 - p.r.awr / 100, 0.6, 1.35);
+    return S.t - (S.runT == null ? S.t : S.runT) >= delay;
+  }
+
   function ballIsRunning() {
     if (S.ball.state === "loose") return true;
     const c = carrier();
@@ -1186,10 +1229,19 @@ function makePlay(o) {
 
   function pursue(p) {
     const c = carrier();
-    const ahead = 0.42 * clamp(p.r.awr / 60, 0.5, 1.6) * react;
-    const tx = c ? c.x + c.vx * ahead : S.ball.x;
-    const ty = c ? c.y + c.vy * ahead : S.ball.y;
-    setWant(p, tx - p.x, ty - p.y);
+    if (!c) { setWant(p, S.ball.x - p.x, S.ball.y - p.y); return; }
+    // Take an angle; don't chase the jersey. A defender aimed at where the
+    // carrier IS can never catch a man of equal speed running away from him,
+    // which is why receivers used to average nine yards after the catch.
+    // Solve for where he will be when we can get there — three passes of
+    // fixed-point iteration is plenty for a straight-line guess — and give a
+    // slow-witted defender a worse guess by shortening his lead.
+    const rx = c.x - p.x, ry = c.y - p.y;
+    const sp = topSpeed(p.r) * clamp(p.r.awr / 66, 0.55, 1.15);
+    let t = 0;
+    for (let i = 0; i < 3; i++) t = Math.hypot(rx + c.vx * t, ry + c.vy * t) / Math.max(1, sp);
+    t = Math.min(t, CFG.pursueLead) * react;
+    setWant(p, rx + c.vx * t, ry + c.vy * t);
   }
 
   function blockTarget(p, aimX, aimY) {
@@ -1242,22 +1294,33 @@ function makePlay(o) {
 
   function drive(dt, input) {
     for (let i = 0; i < P.length; i++) { want[i].x = 0; want[i].y = 0; }
+    if (S.runT == null && ballIsRunning()) S.runT = S.t;
 
     const c = carrier();
     const aiming = S.qbHasIt() && !S.tucked;
     const flight = S.ball.state === "air" && !S.ball.isKick;
 
-    // Which player is the thumb driving this frame?
+    // Which player is the thumb driving this frame? Always one of OURS. This
+    // used to read `attacking(c)`, which flips on a turnover — so the moment
+    // you threw a pick your thumb was steering the other team's returner, and
+    // every man of yours looked like he had given up. Now the ball changing
+    // hands hands you the man best placed to make the tackle instead.
     let user = null;
-    if (c && attacking(c) && !aiming) user = c;
-    else if (flight) {
-      let bd = Infinity;
+    const ours = p => p.side === "off" && p.mot !== "down";
+    const nearestOfOurs = (tx, ty) => {
+      let best = null, bd = Infinity;
       for (const p of P) {
-        if (p.side !== "off" || p.mot === "down") continue;
-        const d = dist(p.x, p.y, S.ball.tx, S.ball.ty);
-        if (d < bd) { bd = d; user = p; }
+        if (!ours(p)) continue;
+        const d = dist(p.x, p.y, tx, ty);
+        if (d < bd) { bd = d; best = p; }
       }
-    }
+      return best;
+    };
+    if (S.turnover) {
+      const b = c || S.ball;
+      user = nearestOfOurs(b.x, b.y);
+    } else if (c && c.side === "off" && !aiming) user = c;
+    else if (flight) user = nearestOfOurs(S.ball.tx, S.ball.ty);
     S.user = user ? user.id : -1;
 
     for (const p of P) {
@@ -1265,7 +1328,12 @@ function makePlay(o) {
 
       if (p === user) {
         if (input.steerX || input.steerY) {
-          setWant(p, input.steerX, input.steerY);
+          // On a turnover the play is running the other way and the thumb is
+          // driving a tackler, not a carrier — so "forward" has to mean "after
+          // the ball". Mirroring the stick keeps the control meaning the same
+          // thing it meant a second ago instead of dragging your man backwards.
+          const m = S.turnover ? -1 : 1;
+          setWant(p, input.steerX * m, input.steerY * m);
           p.sprint = input.sprint;
           continue;
         }
@@ -1385,7 +1453,7 @@ function makePlay(o) {
 
   function defenseAI(p) {
     if (p.mot === "engaged") { setWant(p, S.ball.x - p.x, S.ball.y - p.y); return; }
-    if (ballIsRunning()) return pursue(p);
+    if (ballIsRunning() && readsRun(p)) return pursue(p);
     const j = p.job;
 
     if (j.t === "rush" || j.t === "contain") {
@@ -1968,15 +2036,20 @@ function simulateTheirDrive() {
       }
       if (fg) { d.events.push({ text: "FIELD GOAL MISSED", los, kind: "miss" });
                 d.result = "miss"; d.endY = clamp(los + 7, FIELD.ownGoal + 1, FIELD.oppGoal - 1); break; }
+      // They punt the way they are driving, so y goes DOWN. This used to read
+      // `los + punt`, copied from your own punt where y goes up — which handed
+      // you the ball around their 30 every time they gave it up. Your average
+      // possession started 35 yards from the end zone; that one sign was worth
+      // several touchdowns a game on its own.
       const punt = rng.range(34, 52);
-      const land = clamp(los + punt, FIELD.ownGoal + 1, FIELD.oppGoal + 8);
+      const land = los - punt;
       d.events.push({ text: "PUNT — " + Math.round(punt) + " YARDS", los, kind: "punt" });
       d.result = "punt";
-      d.endY = land >= FIELD.oppGoal ? FIELD.oppGoal - 20 : land;
+      d.endY = land <= FIELD.ownGoal ? FIELD.ownGoal + 20 : land;   // touchback
       break;
     }
   }
-  if (!d.result) { d.result = "punt"; d.endY = clamp(los + 40, FIELD.ownGoal + 1, FIELD.oppGoal - 20); }
+  if (!d.result) { d.result = "punt"; d.endY = clamp(los - 40, FIELD.ownGoal + 20, FIELD.oppGoal - 20); }
   d.events.push({ text: "", los, kind: "end" });
 }
 
@@ -2262,8 +2335,11 @@ function updateCamera(dt, snap) {
   const fieldW = (FIELD.L + FIELD_MARGIN * 2) * PPY;
   const fieldH = FIELD.W * PPY;
   // Downfield is to the LEFT, so the ball sits right of centre and you see
-  // where you are going.
-  const tx = clamp((FIELD.L + FIELD_MARGIN - focusY()) * PPY - ARTW * 0.62,
+  // where you are going. On a turnover the play is running the other way, so
+  // the bias flips with it — otherwise the return you are chasing happens in
+  // the narrow strip of screen behind the ball.
+  const lead = (G.play && G.play.turnover) ? 0.38 : 0.62;
+  const tx = clamp((FIELD.L + FIELD_MARGIN - focusY()) * PPY - ARTW * lead,
                    0, Math.max(0, fieldW - ARTW));
   const ty = clamp((FIELD.W - focusX()) * PPY - VIEWH * 0.5,
                    0, Math.max(0, fieldH - VIEWH));
@@ -2760,14 +2836,25 @@ function drawDefense() {
   panel(x0, y0, w, h, COL.night2, COL.edge);
   text(s.opp.city + " HAVE THE BALL", x0 + w / 2, y0 + 7, { color: s.opp.trim });
 
-  // The whole drive at a glance.
+  // The whole drive at a glance, laid out the way the field itself is laid
+  // out: your end zone on the RIGHT, theirs on the left, because you attack
+  // leftward. This bar used to run the other way, so the instant they took
+  // possession the game showed you a field pointing the opposite way to the
+  // one you had been playing on all drive — which reads as the whole game
+  // turning around.
   const bx = x0 + 12, bw = w - 24, by = y0 + 22;
+  const barX = y => bx + bw * clamp(1 - y / FIELD.L, 0, 1);
+  const ez = bw * (FIELD.EZ / FIELD.L);
   rect(bx, by, bw, 8, COL.turfDark);
-  rect(bx, by, bw * (FIELD.EZ / FIELD.L), 8, s.my.jersey);
-  rect(bx + bw * (1 - FIELD.EZ / FIELD.L), by, bw * (FIELD.EZ / FIELD.L), 8, s.opp.jersey);
-  rect(bx + bw * clamp(s.los / FIELD.L, 0, 1) - 1, by - 3, 2, 14, COL.flood);
-  text("YOUR GOAL", bx, by + 13, { align: -1, color: COL.dim, shadow: false });
-  text(fieldLabel(s.los, false), bx + bw, by + 13, { align: 1, color: COL.ink, shadow: false });
+  rect(bx, by, ez, 8, s.opp.jersey);              // their end zone, far left
+  rect(bx + bw - ez, by, ez, 8, s.my.jersey);     // yours, far right
+  const mx = barX(s.los);
+  rect(mx - 1, by - 3, 2, 14, COL.flood);
+  // A chevron off the marker, pointing the way they are coming — at you.
+  for (let i = 0; i < 4; i++) rect(mx + 2 + i, by + i, 1, 8 - i * 2, COL.flood);
+  text(s.opp.ab + " GOAL", bx, by + 13, { align: -1, color: COL.dim, shadow: false });
+  text(fieldLabel(s.los, false), x0 + w / 2, by + 13, { color: COL.ink, shadow: false });
+  text("YOUR GOAL", bx + bw, by + 13, { align: 1, color: COL.dim, shadow: false });
 
   const lines = s.log.slice(-3);
   lines.forEach((l, i) => {

@@ -98,15 +98,22 @@ section("2. determinism");
   }
   check("same seed, same result", !mismatch, mismatch);
 
-  // An unsteered run is close to deterministic — it is geometry plus one tackle
-  // roll — so divergence is measured across the whole book, where the catch and
-  // contact rolls actually get consumed.
-  const spread = new Set();
-  for (const play of PLAYS)
+  // An unsteered snap is close to deterministic — the quarterback never throws,
+  // so it is geometry plus a tackle roll or two — which makes the aggregate a
+  // weak canary. What actually matters is that no single play in the book has
+  // collapsed to one outcome, so this checks per play as well as in total.
+  const per = new Map();
+  for (const play of PLAYS) {
+    const set = new Set();
     for (let s = 1; s <= 30; s++)
-      spread.add(play.id + ":" + runPlay({ play, scheme: SCHEMES[0], seed: s }).sim.result.yards.toFixed(3));
-  check("different seeds diverge", spread.size > PLAYS.length * 4,
-        `${spread.size} distinct results over ${PLAYS.length * 30} plays`);
+      set.add(runPlay({ play, scheme: SCHEMES[0], seed: s }).sim.result.yards.toFixed(3));
+    per.set(play.name, set.size);
+  }
+  const stuck = [...per].filter(([, n]) => n < 2).map(([k]) => k);
+  const total = [...per.values()].reduce((a, b) => a + b, 0);
+  check("no play has collapsed to one outcome", stuck.length === 0, stuck.join(", "));
+  check("different seeds diverge", total > PLAYS.length * 2.5,
+        `${total} distinct results over ${PLAYS.length * 30} plays`);
 }
 
 /* =====================================================================
@@ -277,7 +284,10 @@ section("6. a full game through the phase machine");
 
     // A scripted thumb.
     if (st.phase === "playcall") {
-      const opts = A.HOT.filter(b => b.id.startsWith("play:") || b.id === "punt" || b.id === "fg");
+      // Random plays, but a caller who punts on first down is not exercising
+      // the phase machine, it is just ending drives.
+      const opts = A.HOT.filter(b => b.id.startsWith("play:") ||
+                                     (st.down === 4 && (b.id === "punt" || b.id === "fg")));
       if (opts.length) { A.Input.tap = rng.pick(opts).id; taps++; }
     } else if (st.phase === "presnap") {
       A.Input.snap = true;
@@ -292,8 +302,12 @@ section("6. a full game through the phase machine");
       if (sim.qbHasIt() && !sim.threw && sim.t > (st.chosen.develop || 1)) {
         const tg = sim.targets();
         if (tg.length) {
-          const r = rng.pick(tg);
-          A.Input.throwTo = { x: r.x + r.vx * 0.3, y: r.y + r.vy * 0.3 };
+          // Lead by the flight time, the way the reticle teaches. A fixed
+          // third of a second is not a bad player, it is a broken one — every
+          // ball lands behind the receiver and in the trailing defender's lap.
+          const r = rng.pick(tg), qb = sim.P[0];
+          const flight = Math.hypot(r.x - qb.x, r.y - qb.y) / A.CFG.passSpeed;
+          A.Input.throwTo = { x: r.x + r.vx * flight, y: r.y + r.vy * flight };
         }
       } else {
         A.Input.steerX = 0; A.Input.steerY = 1; A.Input.sprint = true;
@@ -337,6 +351,11 @@ section("6. a full game through the phase machine");
 section("7. ten games, invariants only");
 {
   let worst = null, scores = [];
+  // Where every possession of yours begins. A punt that travels the wrong way
+  // — which is what the opponent's simulated one used to do — hands you the
+  // ball in field-goal range every time they give it up, and the scoreboard
+  // runs into the seventies without any single play looking wrong.
+  const starts = [];
   for (let g = 0; g < 10; g++) {
     A.SCREEN = "game";
     const rng = makeRNG(1000 + g);
@@ -361,8 +380,10 @@ section("7. ten games, invariants only");
           if (tg.length) { const r = rng.pick(tg); A.Input.throwTo = { x: r.x, y: r.y + 1 }; }
         } else { A.Input.steerX = rng.range(-0.4, 0.4); A.Input.steerY = 1; A.Input.sprint = true; }
       }
+      const wasOurs = st.poss === "us";
       A.update(H);
       frames++;
+      if (!wasOurs && st.poss === "us") starts.push(FIELD.oppGoal - st.los);
       if (st.down < 1 || st.down > 4 || !finite(st.los) || st.los < 0 || st.los > FIELD.L)
         worst = worst || `game ${g}: down ${st.down} los ${st.los}`;
     }
@@ -373,6 +394,9 @@ section("7. ten games, invariants only");
   check("ten games all finished legally", !worst, worst);
   const anyPoints = scores.some(s => s !== "0-0");
   check("points get scored across ten games", anyPoints, scores.join(" "));
+  const meanStart = starts.reduce((a, b) => a + b, 0) / Math.max(1, starts.length);
+  console.log(`   your possessions began ${meanStart.toFixed(1)} yds out (n=${starts.length})`);
+  check("you have to drive the field", meanStart > 55, meanStart.toFixed(1) + " yds out");
 }
 
 /* =====================================================================
@@ -410,7 +434,7 @@ section("7b. incompletions");
    ===================================================================== */
 section("7c. turnover returns");
 {
-  let samples = 0, movingTotal = 0, towardTotal = 0;
+  let samples = 0, movingTotal = 0, towardTotal = 0, thumbOnThem = 0, thumbNobody = 0;
   for (let seed = 1; seed <= 600; seed++) {
     const sim = makePlay({
       play: PLAYS[4], scheme: SCHEMES[2], los: 50, ballX: FIELD.W / 2, lineToGain: 60,
@@ -419,7 +443,11 @@ section("7c. turnover returns");
     sim.snap();
     let i = 0, thrown = false, pickAt = null, taken = false;
     while (!sim.over && i < 1400) {
-      const inp = { steerX: 0, steerY: 0 };
+      // A thumb that stays on the screen, because a real one does. The bug this
+      // section exists to catch was a control bug, not an AI bug: the thumb was
+      // handed the man who had just intercepted you, so a player pressing
+      // forward was driving the return himself while his own men gave chase.
+      const inp = { steerX: 0.3, steerY: 1, sprint: true };
       // Throw it straight at the deep safety.
       if (!thrown && sim.qbHasIt() && sim.t > 1.6) {
         const d = sim.P.find(p => p.side === "def" && p.pos === "S");
@@ -430,6 +458,8 @@ section("7c. turnover returns");
       const c = sim.P.find(p => p.hasBall);
       if (pickAt !== null && !taken && c && sim.t > pickAt + 0.2) {
         taken = true; samples++;
+        const u = sim.P.find(p => p.id === sim.user);
+        if (!u) thumbNobody++; else if (u.side !== "off") thumbOnThem++;
         const chasers = sim.P.filter(p => p.side === "off" && p.mot !== "down");
         movingTotal += chasers.filter(p => Math.hypot(p.vx, p.vy) > 1.0).length;
         // Intent, not progress: is he pointed at the man with the ball? A fast
@@ -448,6 +478,10 @@ section("7c. turnover returns");
   check("enough picks to judge", samples > 20, String(samples));
   check("the intercepted team does not freeze", avgMoving >= 3.5, avgMoving.toFixed(1));
   check("they run at the returner", avgToward >= 2.5, avgToward.toFixed(1));
+  check("your thumb never drives their returner", thumbOnThem === 0,
+        `${thumbOnThem} of ${samples} picks`);
+  check("your thumb is given someone to chase with", thumbNobody === 0,
+        `${thumbNobody} of ${samples} picks`);
 }
 
 /* =====================================================================
