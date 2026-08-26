@@ -358,6 +358,39 @@ function makeRoster(team, seed) {
   return { off: group(OFF_POS), def: group(DEF_POS), k: { pos: "K", num: number("K"), r: makeRatings("K", team.str, rng) } };
 }
 
+/* ---- how good is he, in stars -------------------------------------
+   A number out of ninety-nine is a spreadsheet. Five stars in halves is
+   a card you can read at a glance, and it is the same information.
+   ------------------------------------------------------------------ */
+const starsOf = ovr => clamp(Math.round(ovr / 10) / 2, 0.5, 5);
+// Filled stars up to `now`, dim ones out to `max` — what he is, and how far
+// he can still go.
+function starRow(now, max, x, y, col, dim) {
+  let out = "", n = now;
+  while (n >= 1) { out += "★"; n -= 1; }
+  if (n >= 0.5) out += "✧";
+  text(out, x, y, { align: -1, color: col || COL.flood, shadow: false });
+  const ghost = Math.ceil(max) - Math.ceil(now);
+  if (ghost > 0)
+    text("★".repeat(ghost), x + textW(out) + (out ? TRACK : 0), y,
+         { align: -1, color: dim || "#3E4C58", shadow: false });
+  return textW(out) + (ghost ? ghost * (GW + TRACK) : 0);
+}
+
+/* ---- what a card shows for each position ---------------------------
+   Only the ratings that decide anything for the job he actually does.
+   All nine apply to everybody in the simulation, but a lineman's cover
+   grade has never once changed a snap, and printing it implies it did.
+   ------------------------------------------------------------------ */
+const SHEET = {
+  QB: [["ACCURACY", "awr"], ["ARM", "pow"], ["SPEED", "spd"], ["POISE", "agi"]],
+  RB: [["SPEED", "spd"], ["POWER", "pow"], ["AGILITY", "agi"], ["HANDS", "hnd"]],
+  WR: [["SPEED", "spd"], ["HANDS", "hnd"], ["AGILITY", "agi"], ["RELEASE", "acc"]],
+  TE: [["HANDS", "hnd"], ["BLOCKING", "blk"], ["POWER", "pow"], ["SPEED", "spd"]],
+  OL: [["BLOCKING", "blk"], ["POWER", "pow"], ["AWARENESS", "awr"], ["AGILITY", "agi"]],
+  K:  [["LEG", "pow"], ["ACCURACY", "awr"], ["NERVE", "agi"]],
+};
+
 const scaled = (rating, lo, hi) => lo + (hi - lo) * clamp(rating, 0, 99) / 99;
 const topSpeed = r => scaled(r.spd, CFG.speedMin, CFG.speedMax);
 const accelOf  = r => scaled(r.acc, CFG.accelMin, CFG.accelMax);
@@ -402,6 +435,9 @@ const GLYPHS = {
   ">":"#....,.#...,..#..,...#.,..#..,.#...,#....",
   "<":"....#,...#.,..#..,.#...,..#..,...#.,....#",
   "#":".#.#.,.#.#.,#####,.#.#.,#####,.#.#.,.#.#.",
+  "@":".###.,#...#,#.##.,#.#.#,#.###,#....,.###.",
+  "★":"..#..,..#..,#####,.###.,.###.,##.##,.....",
+  "✧":"..#..,..#..,###..,.##..,.##..,##...,.....",
   "▲":"..#..,..#..,.###.,.###.,#####,#####,.....",
   "▼":".....,#####,#####,.###.,.###.,..#..,.....",
 };
@@ -633,6 +669,7 @@ function newSeasonLeague(myAb) {
     // the same way it starts with better players.
     def: Math.round(clamp(56 + teamBy(myAb).str * 1.8, 42, 78)),
     log: [],                       // one line per week
+    results: [],                   // ...and the same thing the schedule can read
     phase: "regular",              // regular | playoffs | offseason | done
     bracket: null,
     title: 0,                      // championships won
@@ -1979,7 +2016,7 @@ function makePlay(o) {
         const mine = attacking(win);
         win.hasBall = true;
         S.ball = { state: "held", who: win.id, x: win.x, y: win.y, h: 0 };
-        if (mine) end("fumble-own", win.x, win.y, "FUMBLE — RECOVERED");
+        if (mine) end("fumble-own", win.x, win.y, "FUMBLE · RECOVERED");
         else {
           S.turnover = true; S.shake = 0.4;
           S.graceUntil = S.t + CFG.turnoverGrace;
@@ -1988,7 +2025,7 @@ function makePlay(o) {
         return;
       }
       if (b.timer <= 0 || b.x <= 0.2 || b.x >= FIELD.W - 0.2)
-        end("fumble-own", b.x, b.y, "FUMBLE — BALL DEAD");
+        end("fumble-own", b.x, b.y, "FUMBLE · BALL DEAD");
     }
   }
 
@@ -2203,6 +2240,15 @@ const fgDistance = () => (FIELD.oppGoal - G.st.los) + 17;
 const inFGRange = () => fgDistance() <= 58;
 
 /* ---- clock ------------------------------------------------------- */
+// The clock used to sit still through a snap and then jump by the whole
+// length of the play the instant the whistle went. It runs live now; the
+// quarter is only allowed to actually END between plays, the way it does in
+// the real thing — you always get to finish the down you are in.
+function burnLive(seconds) {
+  const s = G.st;
+  s.clock = Math.max(0, s.clock - seconds);
+}
+
 function burn(seconds) {
   const s = G.st;
   s.clock -= seconds;
@@ -2280,6 +2326,8 @@ function finishSeasonGame(s) {
     recordResult(LEAGUE.my, s.opp.ab, s.us, s.them);
     simOtherGames(rng);
     LEAGUE.log.push(`W${LEAGUE.week + 1} ${won ? "W" : tied ? "T" : "L"} ${s.us}-${s.them} ${s.opp.ab}`);
+    (LEAGUE.results || (LEAGUE.results = []))[LEAGUE.week] =
+      { opp: s.opp.ab, us: s.us, them: s.them };
     LEAGUE.week++;
     if (LEAGUE.week >= REG_WEEKS) startPlayoffs(rng);
   }
@@ -2573,7 +2621,9 @@ function applyResult(res) {
   // nothing on the stat sheet and the total on the final screen flattered you.
   if (res.kind !== "incomplete") st.yards += res.yards;
 
-  const quarterOver = burn(res.elapsed + CFG.huddle);
+  // Only the huddle is charged here — the play itself was billed second by
+  // second while you were running it.
+  const quarterOver = burn(CFG.huddle);
 
   switch (res.kind) {
     case "td": {
@@ -2755,7 +2805,7 @@ function simulateTheirDrive() {
     } else {
       const roll = rng.unit();
       if (roll < 0.012 - lift * 0.08) {
-        d.events.push({ text: "FUMBLE — YOU RECOVER", los, kind: "turnover" });
+        d.events.push({ text: "FUMBLE · YOU RECOVER", los, kind: "turnover" });
         d.endY = clamp(los, FIELD.ownGoal + 1, FIELD.oppGoal - 1);
         d.result = "turnover"; over = true;
       } else {
@@ -2791,7 +2841,7 @@ function simulateTheirDrive() {
       // several touchdowns a game on its own.
       const punt = rng.range(34, 52);
       const land = los - punt;
-      d.events.push({ text: "PUNT — " + Math.round(punt) + " YARDS", los, kind: "punt" });
+      d.events.push({ text: "PUNT · " + Math.round(punt) + " YARDS", los, kind: "punt" });
       d.result = "punt";
       d.endY = land <= FIELD.ownGoal ? FIELD.ownGoal + 20 : land;   // touchback
       break;
@@ -3653,50 +3703,52 @@ function drawRoutes() {
   if (a <= 0.01 || !G.play) return;
   const sim = G.play;
 
-  // Dashes march downfield along the path, so a long route reads as a
-  // direction and not just a line lying on the grass.
-  const march = ANIM * 14;
-  const dot = (x, y, col, big) => {
-    ctx.globalAlpha = a;
-    rect(x - (big ? 1 : 0.5), y - (big ? 1 : 0.5), big ? 2 : 1, big ? 2 : 1, col);
-    ctx.globalAlpha = 1;
-  };
-  const trail = (ax, ay, bx, by, col, off) => {
-    const len = Math.hypot(bx - ax, by - ay);
-    const n = Math.max(1, Math.round(len / 4));
-    for (let i = 0; i <= n; i++) {
-      // A three-on, one-off dash pattern, sliding along the path.
-      if (((i + off) % 4) === 3) continue;
-      const t = i / n;
-      dot(lerp(ax, bx, t), lerp(ay, by, t), col);
-    }
-    return n;
-  };
-
+  // Solid lines, not dashes. A dotted path is harder to follow at a glance
+  // than a drawn one — you end up reading the gaps.
+  const paths = [];
   for (const p of sim.P) {
     if (p.side !== "off") continue;
     const j = p.job;
     // Fixed colours rather than the club's, so a route never comes out the
     // same yellow as the line to gain.
-    let pts = null, col = "#D6E8FF";
+    let pts = null, col = "#5FD07A";
     if (j.t === "route" || j.t === "delay") pts = p.route;
-    else if (j.t === "carry") { pts = p.route; col = "#FFA35C"; }
-    else if (j.t === "drop") { pts = [{ x: p.x, y: p.y - j.depth }]; col = "#93A8BA"; }
+    else if (j.t === "carry") { pts = p.route; col = "#F2F5F7"; }
+    else if (j.t === "drop") { pts = [{ x: p.x, y: p.y - j.depth }]; col = "#7FB6E8"; }
     if (!pts || !pts.length) continue;
-
-    let cx = scrX(p.y), cy = scrY(p.x), off = Math.floor(march);
-    for (const n of pts) {
-      const nx = scrX(n.y), ny = scrY(n.x);
-      off += trail(cx, cy, nx, ny, col, off);
-      cx = nx; cy = ny;
-    }
-    dot(cx, cy, col, true);          // the spot he is breaking to
+    const poly = [[scrX(p.y), scrY(p.x)]];
+    for (const n of pts) poly.push([scrX(n.y), scrY(n.x)]);
+    paths.push({ poly, col });
   }
-
-  // The handoff, as an arrow from the man giving it to the man taking it.
+  // A handoff is a path too — from the man giving it to the man taking it.
   const qb = sim.P[0], rb = sim.P.find(q => q.side === "off" && q.job.t === "carry");
   if (qb && rb && qb.job.t === "hand")
-    trail(scrX(qb.y), scrY(qb.x), scrX(rb.y), scrY(rb.x), "#FFA35C", 0);
+    paths.push({ poly: [[scrX(qb.y), scrY(qb.x)], [scrX(rb.y), scrY(rb.x)]], col: "#F2F5F7" });
+
+  // Every outline first, then every fill, so one route's dark edge cannot cut
+  // a notch out of the route drawn before it.
+  const stroke = (poly, w, col) => {
+    ctx.globalAlpha = a;
+    for (let i = 0; i < poly.length - 1; i++) {
+      const [ax, ay] = poly[i], [bx, by] = poly[i + 1];
+      const n = Math.max(1, Math.round(Math.hypot(bx - ax, by - ay) * 2));
+      for (let k = 0; k <= n; k++) {
+        const t = k / n;
+        rect(Math.round(lerp(ax, bx, t)) - w, Math.round(lerp(ay, by, t)) - w, w * 2, w * 2, col);
+      }
+    }
+    ctx.globalAlpha = 1;
+  };
+  for (const q of paths) stroke(q.poly, 2, "#12331C");
+  for (const q of paths) stroke(q.poly, 1, q.col);
+  // A blob on the end, so you can see where a route stops.
+  ctx.globalAlpha = a;
+  for (const q of paths) {
+    const [ex, ey] = q.poly[q.poly.length - 1];
+    rect(ex - 2, ey - 2, 5, 5, "#12331C");
+    rect(ex - 1.5, ey - 1.5, 4, 4, q.col);
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawPlayers(dt) {
@@ -3771,6 +3823,13 @@ function drawPlayers(dt) {
     ctx.ellipse(D(cxA), D(cyA), D(4.6), D(1.8), 0, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(0,0,0,.34)"; ctx.fill();
     ctx.restore();
+
+    // Your skill players are the men on your cards, so they are marked out
+    // there too — the ones whose names you know, among ten others who are
+    // just doing a job.
+    if (p.side === "off" && !sim.turnover && p.idx <= 4 && p.mot !== "down"
+        && cxA > -8 && cxA < ARTW + 8)
+      text("★", cxA, cyA - 31, { color: COL.flood });
 
     const holding = p.hasBall && p.mot !== "down" && frame !== "throwIt" && frame !== "release";
     // A man reaching for a catch reaches at the ball, not at a fixed pose.
@@ -4140,7 +4199,7 @@ function pill(x, y, str, col) {
 function drawTry() {
   const h = 54, y0 = ARTH - h;
   panel(0, y0, ARTW, h, COL.night2, COL.edge);
-  text("TOUCHDOWN — TAKE YOUR POINTS", ARTW / 2, y0 + 5, { color: COL.flood });
+  text("TOUCHDOWN · TAKE YOUR POINTS", ARTW / 2, y0 + 5, { color: COL.flood });
   const bw = 130, gap = 12;
   button("xp", ARTW / 2 - bw - gap / 2, y0 + 16, bw, 30, "KICK", { sub: "1 POINT", primary: true, scale: 2 });
   button("two", ARTW / 2 + gap / 2, y0 + 16, bw, 30, "GO FOR 2", { sub: "FROM THE 2" });
@@ -4359,6 +4418,37 @@ function drawManRow(p, x, y, w, opt = {}) {
   text("/" + p.pot, x + w - 6, y + 4, { align: 1, color: COL.dim, shadow: false });
 }
 
+// Week by week, left to right: who you played, how it went, where you are.
+function drawScheduleStrip(x, y, w, h) {
+  panel(x, y, w, h, COL.night2, COL.edge);
+  const weeks = LEAGUE.schedule.length;
+  const res = LEAGUE.results || [];
+  const cw = w / weeks;
+  const track = y + Math.round(h / 2);
+  rect(x + 6, track, w - 12, 1, "#33424F");
+
+  for (let i = 0; i < weeks; i++) {
+    const cx = Math.round(x + cw * (i + 0.5));
+    const g = LEAGUE.schedule[i].find(p => p[0] === LEAGUE.my || p[1] === LEAGUE.my);
+    const oppAb = !g ? "" : (g[0] === LEAGUE.my ? g[1] : g[0]);
+    const home = g && g[0] === LEAGUE.my;
+    const r = res[i];
+    const now = i === LEAGUE.week && LEAGUE.phase === "regular";
+    const col = !r ? (now ? COL.flood : COL.dim)
+              : r.us > r.them ? COL.good : r.us < r.them ? COL.bad : COL.ink;
+
+    text((home ? "" : "@") + oppAb, cx, y + 3,
+         { color: now ? COL.ink : COL.dim, shadow: false });
+    // A filled pip for a game played, a ring for one still to come.
+    if (r) { rect(cx - 3, track - 3, 7, 7, col); rect(cx - 2, track - 2, 5, 5, col); }
+    else { rect(cx - 3, track - 3, 7, 7, now ? COL.flood : "#3E4C58");
+           rect(cx - 2, track - 2, 5, 5, COL.night2); }
+    text(r ? (r.us > r.them ? "W" : r.us < r.them ? "L" : "T") + " " + r.us + "-" + r.them
+           : (now ? "NEXT" : "-"),
+         cx, y + h - 10, { color: col, shadow: false });
+  }
+}
+
 function drawHub() {
   rect(0, 0, ARTW, ARTH, COL.night);
   const me = teamBy(LEAGUE.my), c = myClub();
@@ -4369,43 +4459,54 @@ function drawHub() {
   text("YEAR " + LEAGUE.year + (LEAGUE.title ? "   ·   " + LEAGUE.title + " TITLE" + (LEAGUE.title > 1 ? "S" : "") : ""),
        ARTW - 8, 10, { align: 1, color: COL.flood });
 
+  // The whole season on one track: who, when, and how it went. A hub that
+  // only knows about this week tells you nothing about the year you are
+  // having.
+  drawScheduleStrip(10, 30, ARTW - 20, 34);
+
   const fx = myFixture();
   const bx = 10, bw = Math.round(ARTW * 0.46);
-  panel(bx, 36, bw, 74, COL.night2, COL.edge);
+  panel(bx, 68, bw, 56, COL.night2, COL.edge);
   if (LEAGUE.phase === "offseason") {
-    text("SEASON OVER", bx + bw / 2, 44, { scale: 2, color: COL.flood });
+    text("SEASON OVER", bx + bw / 2, 76, { scale: 2, color: COL.flood });
     const champ = LEAGUE.champion ? teamBy(LEAGUE.champion) : null;
-    text(champ ? champ.city + " TOOK THE TITLE" : "", bx + bw / 2, 66, { color: COL.dim });
-    button("offseason", bx + 12, 84, bw - 24, 18, "OFF-SEASON", { primary: true });
+    text(champ ? fit(champ.city + " TOOK THE TITLE", bw - 12) : "", bx + bw / 2, 92, { color: COL.dim });
+    button("offseason", bx + 12, 104, bw - 24, 16, "OFF-SEASON", { primary: true });
   } else if (fx) {
     const oppAb = fx[0] === LEAGUE.my ? fx[1] : fx[0];
     const opp = teamBy(oppAb), oc = LEAGUE.clubs[oppAb];
     text(LEAGUE.phase === "playoffs" ? currentTie().round : "WEEK " + (LEAGUE.week + 1),
-         bx + bw / 2, 42, { color: COL.dim });
+         bx + bw / 2, 71, { color: COL.dim });
     // The club's trim colour is right for a stripe and wrong for text — half
     // the league is near-black on a near-black panel.
-    rect(bx + 10, 52, 3, 16, opp.trim);
-    text("VS  " + opp.city, bx + bw / 2, 54, { scale: 2, color: COL.ink });
+    rect(bx + 10, 80, 3, 13, opp.trim);
+    text(fit((fx[0] === LEAGUE.my ? "VS " : "AT ") + opp.city, bw - 24, 2), bx + bw / 2, 80, { scale: 2, color: COL.ink });
     text(oc.w + "-" + oc.l + (oc.t ? "-" + oc.t : "") + "   ·   " + opp.nick,
-         bx + bw / 2, 74, { color: COL.dim });
-    button("kickoff", bx + 12, 86, bw - 24, 18, "KICK OFF", { primary: true });
+         bx + bw / 2, 95, { color: COL.dim });
+    button("kickoff", bx + 12, 104, bw - 24, 16, "KICK OFF", { primary: true });
   } else {
-    text("WATCHING THE PLAYOFFS", bx + bw / 2, 56, { color: COL.dim });
-    button("watch", bx + 12, 86, bw - 24, 18, "CONTINUE", { primary: true });
+    text("WATCHING THE PLAYOFFS", bx + bw / 2, 84, { color: COL.dim });
+    button("watch", bx + 12, 104, bw - 24, 16, "CONTINUE", { primary: true });
   }
 
   // Your record, and the last few results.
   const rx = bx + bw + 10, rw = ARTW - rx - 10;
-  panel(rx, 36, rw, 74, COL.night2, COL.edge);
-  text(c.w + "-" + c.l + (c.t ? "-" + c.t : ""), rx + rw / 2, 42, { scale: 3, color: COL.ink });
-  text("POINTS  " + c.pf + " FOR   " + c.pa + " AGAINST", rx + rw / 2, 66, { color: COL.dim });
-  const recent = LEAGUE.log.slice(-2);
-  recent.forEach((l, i) => text(l, rx + rw / 2, 80 + i * 11, { color: COL.dim, shadow: false }));
+  panel(rx, 68, rw, 56, COL.night2, COL.edge);
+  text(c.w + "-" + c.l + (c.t ? "-" + c.t : ""), rx + rw / 2, 72, { scale: 2, color: COL.ink });
+  text(c.pf + " FOR  ·  " + c.pa + " AGAINST", rx + rw / 2, 88, { color: COL.dim, shadow: false });
+  // Your squad, as two star rows — the same shorthand the roster uses.
+  const off = Math.round(LEAGUE.roster.off.reduce((n, m) => n + overallOf(m), 0) / LEAGUE.roster.off.length);
+  const badge = (label, val, col, dim, y) => {
+    text(label, rx + 10, y, { align: -1, color: COL.dim, shadow: false });
+    starRow(starsOf(val), starsOf(val), rx + 62, y, col, dim);
+  };
+  badge("OFFENCE", off, "#6FE3D2", "#2C4A47", 100);
+  badge("DEFENCE", LEAGUE.def, COL.bad, "#4A2B2B", 110);
 
   const bw2 = Math.round((ARTW - 30) / 3);
-  button("roster", 10, 120, bw2, 22, "ROSTER", { scale: 2 });
-  button("table", 15 + bw2, 120, bw2, 22, "TABLE", { scale: 2 });
-  button("quit", 20 + bw2 * 2, 120, bw2, 22, "MENU", { scale: 2 });
+  button("roster", 10, 128, bw2, 20, "ROSTER", { scale: 2 });
+  button("table", 15 + bw2, 128, bw2, 20, "TABLE", { scale: 2 });
+  button("quit", 20 + bw2 * 2, 128, bw2, 20, "MENU", { scale: 2 });
 
   // The eleven you are taking out there, at a glance.
   const R = LEAGUE.roster;
@@ -4423,36 +4524,149 @@ function drawHub() {
     rect(x, cy, cw, 2, posColour(p.pos));
     text(p.pos, x + cw / 2, cy + 6, { color: posColour(p.pos), shadow: false });
     text(fit(p.last, cw - 6), x + cw / 2, cy + 17, { color: COL.ink, shadow: false });
-    text(String(overallOf(p)), x + cw / 2, cy + 29, { scale: 2, color: COL.flood });
+    const sn = starsOf(overallOf(p)), sm = starsOf(p.pot);
+    const swide = Math.ceil(sm) * (GW + TRACK) - TRACK;
+    starRow(sn, sm, Math.round(x + (cw - swide) / 2), cy + 30);
     // How close he is to his next rating point, and to his ceiling.
     const bw3 = cw - 12, bx3 = x + 6;
     rect(bx3, cy + ch - 17, bw3, 4, "#2B3A47");
     rect(bx3, cy + ch - 17, bw3 * clamp(p.xp / xpNeeded(p), 0, 1), 4, COL.flood);
-    text("AGE " + p.age + " · " + p.pot, x + cw / 2, cy + ch - 10,
-         { color: COL.dim, shadow: false });
+    text("AGE " + p.age, x + cw / 2, cy + ch - 10, { color: COL.dim, shadow: false });
   });
 }
 
 const currentTie = () => (LEAGUE.bracket || []).find(g => !g.done && (g.a === LEAGUE.my || g.b === LEAGUE.my)) || { round: "PLAYOFF" };
 
+/* ---- the roster, as a shelf of cards -------------------------------
+   Eight men and a defence, laid out two rows of five. A row of numbers
+   told you everything and showed you nothing; a card you can pick out
+   by its colour and its stars is a squad.
+   ------------------------------------------------------------------ */
+function rosterCards() {
+  const R = LEAGUE.roster;
+  return R.off.map((p, i) => ({ p, i })).concat([{ p: R.k, i: -1 }]);
+}
+
+function drawManCard(p, x, y, w, h, hot) {
+  const col = posColour(p.pos);
+  panel(x, y, w, h, hot ? COL.panelHi : COL.panel, hot ? COL.flood : COL.edge);
+  // Coloured head, with his shirt number where a photograph would go.
+  rect(x, y, w, 15, col);
+  text(p.pos, x + 5, y + 4, { align: -1, scale: 1, color: "#10171E", shadow: false });
+  text(String(p.num), x + w - 5, y + 4, { align: 1, color: "#10171E", shadow: false });
+
+  text(fit(p.last, w - 8), x + w / 2, y + 20, { color: COL.ink, shadow: false });
+
+  const ovr = overallOf(p);
+  const now = starsOf(ovr), max = starsOf(p.pot);
+  const wide = Math.ceil(max) * (GW + TRACK) - TRACK;
+  starRow(now, max, Math.round(x + (w - wide) / 2), y + 31);
+
+  // Age, and how close he is to his next rating point.
+  const bw = w - 12;
+  rect(x + 6, y + h - 14, bw, 4, "#2B3A47");
+  rect(x + 6, y + h - 14, bw * clamp(p.xp / xpNeeded(p), 0, 1), 4, COL.good);
+  text("AGE " + p.age, x + w / 2, y + h - 8, { color: COL.dim, shadow: false });
+}
+
 function drawRoster() {
   rect(0, 0, ARTW, ARTH, COL.night);
-  text("ROSTER", 10, 8, { align: -1, scale: 2, color: COL.flood });
-  text("AGE      NEXT POINT        OVR / CEILING", ARTW - 10, 12, { align: 1, color: COL.dim });
-  const R = LEAGUE.roster, all = R.off.concat([R.k]);
-  const w = ARTW - 20;
-  all.forEach((p, i) => drawManRow(p, 10, 26 + i * 17, w));
-  panel(10, 26 + all.length * 17 + 2, w, 18, COL.panel, COL.edge);
-  rect(10, 26 + all.length * 17 + 2, 2, 18, COL.bad);
-  text("DEF", 18, 26 + all.length * 17 + 7, { align: -1, color: COL.bad, shadow: false });
-  text("GRADED ON STOPS, NOT SNAPS", 62, 26 + all.length * 17 + 7,
-       { align: -1, color: COL.dim, shadow: false });
-  text(String(LEAGUE.def), 10 + w - 30, 26 + all.length * 17 + 7, { align: 1, color: COL.ink, shadow: false });
-  text("MEN IMPROVE BY DOING. THROW TO HIM AND HE GETS BETTER AT CATCHING;",
-       ARTW / 2, ARTH - 42, { color: "#5D707D", shadow: false });
-  text("THE BAR IS HIS NEXT RATING POINT, THE SECOND NUMBER IS AS GOOD AS HE WILL EVER BE.",
-       ARTW / 2, ARTH - 32, { color: "#5D707D", shadow: false });
+  rect(0, 0, ARTW, 24, COL.night2);
+  rect(0, 24, ARTW, 1, COL.edge);
+  text("ROSTER", 10, 6, { align: -1, scale: 2, color: COL.flood });
+  const cards = rosterCards();
+  text("YOUR " + (cards.length + 1) + " · TAP A MAN", ARTW - 10, 9,
+       { align: 1, color: COL.dim, shadow: false });
+
+  const cols = 5, gap = 5, m = 10;
+  const cw = Math.floor((ARTW - m * 2 - gap * (cols - 1)) / cols);
+  const ch = Math.min(64, Math.floor((ARTH - 30 - 24 - gap) / 2));
+  const top = Math.round(30 + (ARTH - 30 - 24 - (ch * 2 + gap)) / 2);
+  cards.forEach((c, i) => {
+    const x = m + (i % cols) * (cw + gap), y = top + Math.floor(i / cols) * (ch + gap);
+    const id = "man:" + i;
+    HOT.push({ id, x, y, w: cw, h: ch });
+    drawManCard(c.p, x, y, cw, ch, Input.holdId === id);
+  });
+
+  // The defence is a unit, not a set of men, and its card says so.
+  const i = cards.length;
+  const x = m + (i % cols) * (cw + gap), y = top + Math.floor(i / cols) * (ch + gap);
+  panel(x, y, cw, ch, COL.panel, COL.edge);
+  rect(x, y, cw, 15, COL.bad);
+  text("DEF", x + 5, y + 4, { align: -1, color: "#10171E", shadow: false });
+  text("UNIT", x + cw / 2, y + 20, { color: COL.ink, shadow: false });
+  const dn = starsOf(LEAGUE.def), dm = starsOf(Math.min(99, LEAGUE.def + 14));
+  const dwide = Math.ceil(dm) * (GW + TRACK) - TRACK;
+  starRow(dn, dm, Math.round(x + (cw - dwide) / 2), y + 31, COL.bad, "#4A2B2B");
+  text("STOPS, NOT SNAPS", x + cw / 2, y + ch - 8, { color: COL.dim, shadow: false });
+
   button("back", ARTW / 2 - 40, ARTH - 20, 80, 16, "BACK");
+}
+
+/* ---- one man, in full ---------------------------------------------- */
+function drawPlayer() {
+  rect(0, 0, ARTW, ARTH, COL.night);
+  const cards = rosterCards();
+  const idx = clamp(PICK.man || 0, 0, cards.length - 1);
+  const p = cards[idx].p;
+
+  rect(0, 0, ARTW, 24, COL.night2);
+  rect(0, 24, ARTW, 1, COL.edge);
+  rect(6, 5, 4, 14, posColour(p.pos));
+  text(p.pos + " · " + p.first + " " + p.last, 16, 6,
+       { align: -1, scale: 2, color: COL.ink });
+  text("#" + p.num, ARTW - 10, 9, { align: 1, color: COL.dim, shadow: false });
+
+  // Left: who he is. Right: what he can do.
+  const gap = 8, lw = Math.round((ARTW - 20 - gap) * 0.42);
+  const lx = 10, rx = lx + lw + gap, rw = ARTW - rx - 10;
+  const top = 32, h = Math.min(ARTH - top - 30, 124);
+  panel(lx, top, lw, h, COL.night2, COL.edge);
+  text("THE MAN", lx + lw / 2, top + 4, { color: COL.flood });
+  rect(lx + 6, top + 14, lw - 12, 1, COL.edge);
+  const row = (k, v, i, col) => {
+    text(k, lx + 8, top + 20 + i * 12, { align: -1, color: COL.dim, shadow: false });
+    text(v, lx + lw - 8, top + 20 + i * 12, { align: 1, color: col || COL.ink, shadow: false });
+  };
+  const ovr = overallOf(p);
+  row("AGE", String(p.age) + (p.age <= 22 ? "  ROOKIE" : ""), 0);
+  row("SEASONS", String(p.seasons), 1);
+  row("XP LEVEL", String(p.lvl), 2);
+
+  text("RATING", lx + lw / 4, top + 62, { color: COL.dim, shadow: false });
+  text("CEILING", lx + lw * 0.75, top + 62, { color: COL.dim, shadow: false });
+  const now = starsOf(ovr), max = starsOf(p.pot);
+  const w1 = Math.ceil(now) * (GW + TRACK) - TRACK;
+  starRow(now, now, Math.round(lx + lw / 4 - w1 / 2), top + 72);
+  const w2 = Math.ceil(max) * (GW + TRACK) - TRACK;
+  starRow(max, max, Math.round(lx + lw * 0.75 - w2 / 2), top + 72, "#8296A3", "#8296A3");
+  text(ovr + " / " + p.pot, lx + lw / 2, top + 84, { color: COL.dim, shadow: false });
+
+  // Next rating point.
+  const bw = lw - 20;
+  text("NEXT POINT", lx + lw / 2, top + 98, { color: COL.dim, shadow: false });
+  rect(lx + 10, top + 108, bw, 6, "#2B3A47");
+  rect(lx + 10, top + 108, bw * clamp(p.xp / xpNeeded(p), 0, 1), 6, COL.good);
+
+  panel(rx, top, rw, h, COL.night2, COL.edge);
+  text("WHAT HE DOES", rx + rw / 2, top + 4, { color: COL.flood });
+  rect(rx + 6, top + 14, rw - 12, 1, COL.edge);
+  const sheet = SHEET[p.pos] || SHEET.QB;
+  sheet.forEach(([label, key], i) => {
+    const y = top + 22 + i * Math.floor((h - 30) / sheet.length);
+    text(label, rx + 8, y, { align: -1, color: COL.ink, shadow: false });
+    const b = rw - 16, v = clamp(p.r[key], 0, 99) / 99;
+    rect(rx + 8, y + 10, b, 7, "#22303C");
+    rect(rx + 8, y + 10, b * v, 7, v > 0.75 ? COL.good : v > 0.5 ? COL.flood : COL.bad);
+    text(String(Math.round(p.r[key])), rx + rw - 10, y, { align: 1, color: COL.dim, shadow: false });
+  });
+
+  button("manprev", 10, ARTH - 20, 40, 16, "<");
+  button("mannext", 56, ARTH - 20, 40, 16, ">");
+  button("back", ARTW / 2 - 40, ARTH - 20, 80, 16, "BACK");
+  text("HE IMPROVES BY DOING · THROW TO HIM AND HE GETS BETTER AT CATCHING",
+       ARTW / 2, top + h + 4, { color: "#5D707D", shadow: false });
 }
 
 function drawTable() {
@@ -4893,7 +5107,19 @@ function handleTap(id) {
     if (id === "quit") { SCREEN = "title"; G.play = null; G.st = null; return; }
     return;
   }
-  if (SCREEN === "roster" || SCREEN === "table") {
+  if (SCREEN === "roster") {
+    if (id === "back") { Sound.back(); SCREEN = "hub"; return; }
+    if (id.startsWith("man:")) { PICK.man = +id.slice(4); SCREEN = "player"; }
+    return;
+  }
+  if (SCREEN === "player") {
+    const n = rosterCards().length;
+    if (id === "back") { Sound.back(); SCREEN = "roster"; return; }
+    if (id === "manprev") { PICK.man = ((PICK.man || 0) + n - 1) % n; return; }
+    if (id === "mannext") { PICK.man = ((PICK.man || 0) + 1) % n; return; }
+    return;
+  }
+  if (SCREEN === "table") {
     if (id === "back") { Sound.back(); SCREEN = "hub"; }
     return;
   }
@@ -5002,6 +5228,7 @@ function update(dt) {
       if (first) { Input.throwTo = null; Input.tuck = false; }
       G.acc -= H_STEP; steps++;
     }
+    if (steps) burnLive(H_STEP * steps * CFG.clockSpeed);
     if (G.play.over) {
       s.phase = "result";
       G.resultT = CFG.deadBall;
@@ -5074,6 +5301,7 @@ function draw() {
   if (SCREEN === "teams") { drawTeams(); return; }
   if (SCREEN === "hub") { drawHub(); return; }
   if (SCREEN === "roster") { drawRoster(); return; }
+  if (SCREEN === "player") { drawPlayer(); return; }
   if (SCREEN === "table") { drawTable(); return; }
   if (SCREEN === "growth") { drawGrowth(); return; }
   if (SCREEN === "offseason") { drawOffseason(); return; }

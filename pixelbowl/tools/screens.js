@@ -10,7 +10,7 @@ const ROOT = path.join(__dirname, ".."), OUT = process.argv[2] || "/tmp/screens"
   const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
   const epi = `globalThis.API = { get SCREEN(){return SCREEN}, set SCREEN(v){SCREEN=v},
     get LEAGUE(){return LEAGUE}, newSeasonLeague, runDraft, draw, present, update,
-    get G(){return G}, newGame, saveLeague, startNextSeason, kickOffSeasonGame,
+    get G(){return G}, newGame, get PICK(){return PICK}, set PICK(v){PICK=v}, saveLeague, startNextSeason, kickOffSeasonGame,
     buildOffseason, makeRNG };`;
   fs.writeFileSync("/tmp/pbscreens.html", html.replace(/\n<\/script>/, "\n" + epi + "\n</script>"));
   const browser = await chromium.launch({
@@ -36,6 +36,7 @@ const ROOT = path.join(__dirname, ".."), OUT = process.argv[2] || "/tmp/screens"
     A.newSeasonLeague("IRN");
     A.SCREEN = "hub"; grab("3-hub");
     A.SCREEN = "roster"; grab("4-roster");
+    A.SCREEN = "player"; grab("4b-player");
     A.SCREEN = "table"; grab("5-table");
     A.LEAGUE.phase = "offseason";
     A.LEAGUE.offseason = A.buildOffseason(A.makeRNG(7));
