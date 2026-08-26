@@ -243,6 +243,9 @@ const CFG = {
   kickRangeMin: 36, kickRangeMax: 60,
   kickWindMax: 2.2,
   kickSweep: 0.78,       // power-bar cycles per second
+  kickAimSweep: 0.62,    // aim-line cycles per second, once the ball is snapped
+  kickAimSpan: 7,        // yards either side of the posts the aim line covers
+  kickAimTime: 2.0,      // seconds before the rush gets home and blocks it
 
   // Clock. Live play burns game time faster than real time so a short
   // quarter still contains a real quarter's worth of snaps.
@@ -2807,7 +2810,9 @@ function beginKick(kind) {
   players.push({ x: spotX, y: s.los + 4.4, side: "def", role: "rush", y0: s.los + 4.4 });
 
   s.kick = {
-    kind, dist, spotY, spotX, players, t: 0,
+    // Two stages, in the order they happen in the real thing: pick the power,
+    // the ball is snapped, then find your line before the rush arrives.
+    kind, dist, spotY, spotX, players, t: 0, stage: "power", aimT: 0,
     wind: RNG.range(-CFG.kickWindMax, CFG.kickWindMax),
     aimX: 0, power: 0, flight: null,
     range: scaled(s.myRoster.k.r.pow, CFG.kickRangeMin, CFG.kickRangeMax),
@@ -4389,12 +4394,13 @@ function drawKick() {
     drawBall(bx, by, 4, 0.35);
   } else {
     const f = k.flight, t = clamp(f.t / f.dur, 0, 1);
-    const fy = lerp(k.spotY, postsY, t);
-    const fx = lerp(k.spotX, FIELD.midY + f.landX, t);
-    const lift = Math.sin(t * Math.PI) * 9 + t * 3;
+    // A blocked kick never leaves the tee.
+    const fy = f.blocked ? k.spotY : lerp(k.spotY, postsY, t);
+    const fx = f.blocked ? k.spotX : lerp(k.spotX, FIELD.midY + f.landX, t);
+    const lift = f.blocked ? 0 : Math.sin(t * Math.PI) * 9 + t * 3;
     drawBall(scrX(fy), scrY(fx), lift * PPY * 0.5 + 3, f.t * 11);
     if (t >= 1) {
-      const label = f.good ? "GOOD" : (f.hasLeg ? "WIDE" : "SHORT");
+      const label = f.blocked ? "BLOCKED" : f.good ? "GOOD" : (f.hasLeg ? "WIDE" : "SHORT");
       const w = textW(label) * 3 + 20;
       const ly = VIEWTOP + 48;
       panel(ARTW / 2 - w / 2, ly, w, 30, COL.night, f.good ? COL.good : COL.bad);
@@ -4404,12 +4410,14 @@ function drawKick() {
 
   if (k.flight) { drawKickMeter(k); return; }
 
-  if (Input.down) {
-    const across = -(Input.y - Input.sy);               // up on screen aims high
-    k.aimX = clamp(across / 11, -7, 7);
-    // Preview, on the field, from the tee toward the posts — the same
-    // marching squares the throw uses, so aiming a kick reads like aiming a
-    // pass rather than like a different game.
+  // Once the ball is snapped the aim line sweeps across the posts and you
+  // have to catch it. It is the same marching squares the throw preview uses,
+  // so aiming a kick reads like aiming a pass rather than like a different
+  // game — and it ends in a bright marker on the goal line, because that is
+  // the bit you are actually reading.
+  if (k.stage === "aim") {
+    const inWindow = Math.abs(k.aimX) <= FIELD.uprightHalf;
+    const col = inWindow ? COL.good : COL.flood;
     const steps = 34;
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
@@ -4419,15 +4427,17 @@ function drawKick() {
       const px = scrX(fy), py = scrY(fx) - lift * PPY * 0.5;
       const size = 2 + Math.round(t * 1.4);
       rect(px - size / 2 - 1, py - size / 2 - 1, size + 2, size + 2, COL.ink);
-      rect(px - size / 2, py - size / 2, size, size, COL.flood);
+      rect(px - size / 2, py - size / 2, size, size, col);
     }
+    const gy = scrY(FIELD.midY + k.aimX), gxx = scrX(postsY);
+    rect(gxx - 4, gy - 4, 9, 9, COL.ink);
+    rect(gxx - 3, gy - 3, 7, 7, col);
   }
 
   drawKickMeter(k);
-  if (!Input.down) {
-    const hint = "DRAG UP AND DOWN TO AIM  ·  LET GO IN THE GREEN";
-    pill(Math.round(ARTW / 2 - (textW(hint) + 10) / 2), ARTH - 16, hint, COL.ink);
-  }
+  const hint = k.stage === "power" ? "TAP IN THE GREEN FOR POWER"
+                                   : "TAP TO PICK YOUR LINE";
+  pill(Math.round(ARTW / 2 - (textW(hint) + 10) / 2), ARTH - 16, hint, COL.ink);
 }
 
 /* ---- the power bar -------------------------------------------------
@@ -4452,10 +4462,20 @@ function drawKickMeter(k) {
   rect(bx, by, bwi, 1, "rgba(255,255,255,.30)");
   rect(bx, by + bh - 4, bwi, 2, "rgba(0,0,0,.30)");
 
-  // Where the sweep is now.
+  // Where the sweep is now — or, once it is locked in, a gold pin you can
+  // see you have already spent.
+  const locked = k.stage !== "power";
   const px = bx + at(k.power);
   rect(px - 2, by - 2, 4, bh + 2, "#0B0F13");
-  rect(px - 1, by - 1, 2, bh, COL.chalk);
+  rect(px - 1, by - 1, 2, bh, locked ? COL.flood : COL.chalk);
+  if (locked) rect(bx, by, bwi, bh - 2, "rgba(8,11,14,.45)");
+
+  // How long you have left to find your line before the rush arrives.
+  if (locked && !k.flight) {
+    const left = clamp(1 - k.aimT / CFG.kickAimTime, 0, 1);
+    rect(bx, by + bh - 4, bwi, 3, "#1A242E");
+    rect(bx, by + bh - 4, Math.round(bwi * left), 3, left > 0.35 ? COL.flood : COL.bad);
+  }
 
   const reaches = k.power >= need;
   const ry = my + bh + 2;
@@ -4466,8 +4486,9 @@ function drawKickMeter(k) {
   text("WIND " + arrow + " " + Math.abs(w).toFixed(1), mx + bw - 5, ry,
        { align: 1, color: Math.abs(w) > 1.1 ? COL.bad : COL.dim, shadow: false });
   if (!k.flight)
-    text(reaches ? "LET GO" : "NOT ENOUGH", ARTW / 2, ry,
-         { color: reaches ? COL.good : COL.bad, shadow: false });
+    text(locked ? "FIND YOUR LINE" : (reaches ? "LET GO" : "NOT ENOUGH"),
+         ARTW / 2, ry,
+         { color: locked ? COL.ink : reaches ? COL.good : COL.bad, shadow: false });
 }
 
 /* ---- their drive --------------------------------------------------- */
@@ -5214,7 +5235,8 @@ function onUp(e) {
     }
     if (G.st.phase === "kick" && G.st.kick && !G.st.kick.flight) {
       const k = G.st.kick;
-      if (k.power > 0.08) resolveKick(k.aimX, k.power);
+      if (k.stage === "power") { k.stage = "aim"; k.aimT = 0; Sound.snap(); }
+      else resolveKick(k.aimX, k.power);
     }
   }
 
@@ -5444,17 +5466,28 @@ function update(dt) {
 
   if (s.phase === "kick") {
     const k = s.kick;
-    // Creep the rush in, purely for the look of it — you cannot be blocked.
     k.t += dt;
-    // The power bar sweeps on its own and you let go when it is where you
-    // want it. Pulling a distance out of a drag gave you all the time in the
-    // world to get it exactly right, which is not a kick.
+    // Both stages are a line sweeping past a window you have to catch it in.
+    // Pulling a distance out of a drag gave you all the time in the world to
+    // get it exactly right, which is not a kick.
     if (!k.flight) {
-      const cycle = (k.t * CFG.kickSweep) % 2;
-      k.power = 1 - Math.abs(1 - cycle);
+      if (k.stage === "power") {
+        const cycle = (k.t * CFG.kickSweep) % 2;
+        k.power = 1 - Math.abs(1 - cycle);
+      } else {
+        k.aimT += dt;
+        const cycle = (k.aimT * CFG.kickAimSweep * 2) % 2;
+        k.aimX = ((1 - Math.abs(1 - cycle)) * 2 - 1) * CFG.kickAimSpan;
+        // The rush only comes once the ball is actually snapped — and if you
+        // are still hunting for your line when it arrives, it is blocked.
+        for (const pl of k.players)
+          if (pl.role === "rush") pl.y = pl.y0 - Math.min(1.6, k.aimT * 0.85);
+        if (k.aimT >= CFG.kickAimTime) {
+          k.flight = { t: 0, dur: 0.3, good: false, hasLeg: false, landX: 0, blocked: true };
+          s.shake = 0.4; Sound.bigHit();
+        }
+      }
     }
-    for (const pl of k.players)
-      if (pl.role === "rush") pl.y = pl.y0 - Math.min(1.4, k.t * 1.2);
 
     if (k.flight) {
       k.flight.t += dt;
@@ -5469,7 +5502,7 @@ function update(dt) {
           if (burn(6)) { if (endOfQuarter()) return; }
           startTheirDrive(FIELD.oppGoal - 25);
         } else {
-          say("NO GOOD", 1.4, "bad");
+          say(k.flight.blocked ? "BLOCKED" : "NO GOOD", 1.4, "bad");
           if (burn(6)) { if (endOfQuarter()) return; }
           startTheirDrive(Math.max(FIELD.ownGoal + 20, s.los - 7));
         }
