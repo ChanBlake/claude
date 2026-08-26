@@ -3418,7 +3418,7 @@ function fxUpdate(dt, sim) {
   const b = sim.ball;
   if (b.state === "air") {
     FX.trail.push({ x: b.x, y: b.y, h: b.h });
-    if (FX.trail.length > 9) FX.trail.shift();
+    if (FX.trail.length > 14) FX.trail.shift();
   } else if (FX.trail.length) {
     FX.trail.shift();      // let it drain rather than vanish
   }
@@ -3522,8 +3522,8 @@ function fxDrawTrail() {
   for (let i = 0; i < FX.trail.length - 1; i++) {
     const t = FX.trail[i];
     const a = (i + 1) / FX.trail.length;
-    ctx.globalAlpha = a * 0.5;
-    const size = 1 + a * 1.5;
+    ctx.globalAlpha = a * 0.72;
+    const size = 1 + a * 2.2;
     rect(scrX(t.y) - size / 2, scrY(t.x) - t.h * PPY * 0.9 - size / 2, size, size, COL.chalk);
   }
   ctx.globalAlpha = 1;
@@ -3577,6 +3577,28 @@ const lumOf = hex => {
   const n = parseInt(hex.slice(1), 16);
   return (((n >> 16) & 255) * 0.30 + ((n >> 8) & 255) * 0.59 + (n & 255) * 0.11) / 255;
 };
+/* ---- a two-tone ramp off any club colour ---------------------------
+   Flat fills with a dark outline is where pixel art starts; a lit face
+   and a shaded one is where it starts looking drawn. Both are derived
+   from the club's own colour, so nothing has to be authored per team,
+   and both are cached because they are asked for per shape per frame.
+   ------------------------------------------------------------------ */
+const toneCache = new Map();
+function tone(hex, amt) {
+  const key = hex + amt;
+  let hit = toneCache.get(key);
+  if (hit) return hit;
+  const n = parseInt(hex.slice(1), 16);
+  const mix = c => Math.round(clamp(amt > 0 ? c + (255 - c) * amt : c * (1 + amt), 0, 255));
+  hit = "#" + ((1 << 24) | (mix((n >> 16) & 255) << 16) |
+               (mix((n >> 8) & 255) << 8) | mix(n & 255)).toString(16).slice(1);
+  if (toneCache.size > 400) toneCache.clear();
+  toneCache.set(key, hit);
+  return hit;
+}
+const lit = hex => tone(hex, 0.26);
+const dim = hex => tone(hex, -0.30);
+
 const bootCache = new Map();
 function bootFor(pants) {
   let c = bootCache.get(pants);
@@ -3740,7 +3762,7 @@ function drawFigure(p, team, pose, cx, cy, faceLeft, phase, holding, fallSide) {
 
   ctx.save();
   ctx.translate(D(cx), D(cy));
-  ctx.scale(b.w, b.h);
+  ctx.scale(b.w * FIG, b.h * FIG);
 
   // He tips over rather than teleporting onto his back, and overshoots a touch
   // on the way down so it lands rather than arrives.
@@ -3769,9 +3791,12 @@ function drawFigure(p, team, pose, cx, cy, faceLeft, phase, holding, fallSide) {
   const lift = Math.max(0, Math.sin(phase)) * 2.4 * a.run;
   const boot = bootFor(pants);
   const leg = (fx2, fy2) => {
-    limb(0, hipY + bob, fx2, fy2 - 1.1, 2.6, pants);           // trouser
-    limb(fx2 * 0.96, fy2 - 1.4, fx2, fy2 - 0.2, 1.9, "#1B2027");  // sock
-    limb(fx2 - f * 0.5, fy2, fx2 + f * 0.9, fy2, 1.5, boot, 0.5);  // boot
+    limb(0, hipY + bob, fx2, fy2 - 1.1, 2.6, pants);                    // trouser
+    limb(-0.6, hipY + bob, fx2 - 0.6, fy2 - 1.3, 0.9, lit(pants), 0);   // lit face
+    limb(0.9, hipY + bob, fx2 + 0.9, fy2 - 1.3, 0.7, dim(pants), 0);    // shaded face
+    limb(fx2 * 0.96, fy2 - 1.5, fx2, fy2 - 0.3, 2.0, "#1B2027");        // sock
+    limb(fx2 - f * 0.5, fy2 - 0.2, fx2 + f * 0.9, fy2 - 0.2, 1.4, boot, 0.5);
+    limb(fx2 - f * 0.5, fy2 + 0.4, fx2 + f * 1.0, fy2 + 0.4, 0.7, dim(boot), 0);
   };
   leg(lb, -0.4);
   leg(la, -0.4 - lift);
@@ -3781,6 +3806,8 @@ function drawFigure(p, team, pose, cx, cy, faceLeft, phase, holding, fallSide) {
   limb(0, hipY + 0.4 + bob, leanX * 0.8, padY + 1.2 + bob, 4.6, jersey);
   // The shirt is darker where it tucks in, which is enough to stop the torso
   // reading as one flat slab at this size.
+  limb(-1.3, hipY + 0.2 + bob, leanX * 0.8 - 1.3, padY + 1.0 + bob, 1.5, lit(jersey), 0);
+  limb(1.6, hipY + 0.2 + bob, leanX * 0.8 + 1.6, padY + 1.0 + bob, 1.2, dim(jersey), 0);
   wash(0, hipY + 0.2 + bob, leanX * 0.3, hipY - 2.4 + bob, 3.6, "rgba(0,0,0,.20)");
   // Shoulders counter-rotate against the hips on every stride, which is most
   // of what sells a run at any size.
@@ -3789,7 +3816,10 @@ function drawFigure(p, team, pose, cx, cy, faceLeft, phase, holding, fallSide) {
   // ---- the pads --------------------------------------------------------
   const px0 = leanX * 0.8, py0 = padY + bob;
   limb(px0 - span, py0 + twist, px0 + span, py0 - twist, 3.6, jersey);
-  limb(px0 - span * 0.62, py0 - 1.1 + twist * 0.6, px0 + span * 0.62, py0 - 1.1 - twist * 0.6,
+  // The top of the pad catches the light and the underside falls away.
+  limb(px0 - span * 0.9, py0 - 1.2 + twist, px0 + span * 0.9, py0 - 1.2 - twist, 1.1, lit(jersey), 0);
+  limb(px0 - span * 0.9, py0 + 1.3 + twist, px0 + span * 0.9, py0 + 1.3 - twist, 0.9, dim(jersey), 0);
+  limb(px0 - span * 0.62, py0 - 0.2 + twist * 0.6, px0 + span * 0.62, py0 - 0.2 - twist * 0.6,
        1.0, trim, 0);
 
   // ---- arms ------------------------------------------------------------
@@ -3806,6 +3836,10 @@ function drawFigure(p, team, pose, cx, cy, faceLeft, phase, holding, fallSide) {
     const bend = clamp(1 - L / REACH, 0, 1) * 1.9 * f;
     const mx = (sx + ex) / 2 - dy / L * bend, my = (sy + ey) / 2 + dx / L * bend;
     limb(sx, sy, mx, my, 2.2, jersey);        // upper arm, still in the sleeve
+    limb(sx, sy, lerp(sx, mx, 0.45), lerp(sy, my, 0.45), 1.0, lit(jersey), 0);
+    // A cuff, not a sleeve: at this size anything wider than this swallows
+    // the whole upper arm and the figure goes blobby.
+    limb(lerp(sx, mx, 0.86), lerp(sy, my, 0.86), mx, my, 1.7, trim, 0);
     limb(mx, my, ex, ey, 1.6, SKIN, 1.1);     // forearm
     blob(ex, ey, 0.95, SKIN, 0.45);           // hand
   };
@@ -3821,7 +3855,10 @@ function drawFigure(p, team, pose, cx, cy, faceLeft, phase, holding, fallSide) {
   ctx.beginPath(); ctx.arc(hx, hy, 2.3, 0, Math.PI * 2); ctx.clip();
   // The centre stripe, and a rake of light off the crown.
   limb(hx - 2.8, hy - 1.5, hx + 2.8, hy - 1.5, 0.9, trim, 0);
-  wash(hx - f * 2.4, hy - 2.1, hx + f * 0.4, hy - 2.6, 1.1, "rgba(255,255,255,.26)");
+  limb(hx - f * 2.5, hy - 2.0, hx + f * 0.2, hy - 2.5, 1.2, lit(helmet), 0);
+  blob(hx - f * 1.9, hy - 1.6, 0.5, tone(helmet, 0.45), 0);
+  limb(hx - f * 2.6, hy + 1.1, hx + f * 1.4, hy + 1.7, 1.2, dim(helmet), 0);
+  blob(hx - f * 1.5, hy + 0.4, 0.55, dim(helmet), 0);       // the ear hole
   // The shadow the pads throw up under the jaw.
   wash(hx - 2.8, hy + 2.0, hx + 2.8, hy + 2.0, 1.6, "rgba(0,0,0,.28)");
   ctx.restore();
@@ -3848,6 +3885,15 @@ function drawFigure(p, team, pose, cx, cy, faceLeft, phase, holding, fallSide) {
    screen and the uprights stand up out of it. `y0` and `y1` are the two
    ends of the crossbar in screen rows.
    ------------------------------------------------------------------ */
+/* ---- how big a man is ----------------------------------------------
+   A figure is drawn in art units, not in yards, so this one number
+   decides how many pixels there are to spend on him. At 1.0 he was
+   eighteen pixels tall, which is about as much detail as a silhouette
+   and no more. Nothing else on the screen is measured against him, so
+   making him bigger costs no layout anywhere.
+   ------------------------------------------------------------------ */
+const FIG = 1.24;
+
 const POST = "#F2D53C", POST_LIT = "#FFF4A0", POST_DARK = "#7A5D0E";
 function goalPost(gx, y0, y1) {
   const top = Math.min(y0, y1), bot = Math.max(y0, y1);
@@ -3873,17 +3919,66 @@ function goalPost(gx, y0, y1) {
 }
 
 // The ball in flight or on the floor.
+// The ball is the smallest thing on the field and the only one that matters,
+// so it gets a pale rim to lift it off the turf, a lit top and the laces.
 function drawBall(cx, cy, lift, spin) {
   ctx.save();
   ctx.translate(cx, cy - lift);
   ctx.rotate(spin || 0);
-  ctx.beginPath(); ctx.ellipse(0, 0, 2.7, 1.7, 0, 0, Math.PI * 2);
-  ctx.fillStyle = EDGE; ctx.fill();
-  ctx.beginPath(); ctx.ellipse(0, 0, 2.1, 1.2, 0, 0, Math.PI * 2);
-  ctx.fillStyle = "#8A5228"; ctx.fill();
-  ctx.strokeStyle = "#F0EDE4"; ctx.lineWidth = 0.35; ctx.lineCap = "round";
-  ctx.beginPath(); ctx.moveTo(-0.8, 0); ctx.lineTo(0.8, 0); ctx.stroke();
+  const oval = (rx, ry, col) => {
+    ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fillStyle = col; ctx.fill();
+  };
+  oval(3.3, 2.1, EDGE);
+  oval(2.8, 1.7, "#EDE6D4");        // the pale rim
+  oval(2.4, 1.4, "#9A5B2C");
+  oval(2.4, 0.7, "#B87038");        // lit along the top
+  ctx.strokeStyle = "#F4F1E8"; ctx.lineWidth = 0.45; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(-0.9, 0); ctx.lineTo(0.9, 0); ctx.stroke();
+  for (const lx of [-0.5, 0, 0.5]) {
+    ctx.beginPath(); ctx.moveTo(lx, -0.45); ctx.lineTo(lx, 0.45); ctx.stroke();
+  }
   ctx.restore();
+}
+
+/* ---- where is it going to come down --------------------------------
+   The hardest thing to read in the game was a ball in the air: it is
+   five pixels across, it is moving, and the grass behind it is the
+   same everywhere. So while it is up there the spot it will land on is
+   marked on the turf, the marker tightens as the ball nears it, and a
+   line runs from the marker up to the ball so you can see how high it
+   still is.
+   ------------------------------------------------------------------ */
+function drawBallTrack(sim) {
+  const b = sim.ball;
+  if (b.state !== "air") return;
+  const t = clamp(b.tt / b.dur, 0, 1);
+  const mx = scrX(b.ty), my = scrY(b.tx);
+  const bx = scrX(b.y), by = scrY(b.x) - b.h * PPY * 0.9;
+
+  // A tether from the shadow to the ball: the length IS the height.
+  ctx.globalAlpha = 0.5;
+  const gy = scrY(b.x);
+  for (let y = by + 3; y < gy; y += 3) rect(bx, y, 1, 1, COL.chalk);
+  ctx.globalAlpha = 1;
+
+  // The shadow, tight and dark when it is low, wide and faint when high.
+  const near = 1 - clamp(b.h / 7, 0, 1);
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(bx, gy, 2 + (1 - near) * 3, 1 + (1 - near) * 1.4, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(0,0,0," + (0.14 + near * 0.3).toFixed(2) + ")";
+  ctx.fill();
+  ctx.restore();
+
+  // The landing spot, closing in as the ball arrives.
+  const r = Math.round(9 - t * 5);
+  const col = t > 0.72 ? COL.chalk : "rgba(232,239,228,.75)";
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+    rect(mx + dx * r - (dy ? 2 : 0), my + dy * r - (dx ? 2 : 0),
+         dy ? 5 : 1, dx ? 5 : 1, col);
+  }
+  rect(mx - 1, my - 1, 2, 2, col);
 }
 
 /* ---- the play ---------------------------------------------------- */
@@ -4044,7 +4139,7 @@ function drawPlayers(dt) {
     if (p.id === sim.user && p.mot !== "down") {
       ctx.save();
       ctx.beginPath();
-      ctx.ellipse(D(cxA), D(cyA + 0.5), D(6.2), D(2.4), 0, 0, Math.PI * 2);
+      ctx.ellipse(D(cxA), D(cyA + 0.5), D(6.2 * FIG), D(2.4 * FIG), 0, 0, Math.PI * 2);
       ctx.strokeStyle = COL.flood; ctx.lineWidth = D(0.8); ctx.stroke();
       ctx.restore();
     }
@@ -4052,7 +4147,7 @@ function drawPlayers(dt) {
     // Shadow, so bodies sit on the turf rather than float.
     ctx.save();
     ctx.beginPath();
-    ctx.ellipse(D(cxA), D(cyA), D(4.6), D(1.8), 0, 0, Math.PI * 2);
+    ctx.ellipse(D(cxA), D(cyA), D(4.6 * FIG), D(1.8 * FIG), 0, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(0,0,0,.34)"; ctx.fill();
     ctx.restore();
 
@@ -4061,7 +4156,7 @@ function drawPlayers(dt) {
     // just doing a job.
     if (p.side === "off" && !sim.turnover && p.idx <= 4 && p.mot !== "down"
         && cxA > -8 && cxA < ARTW + 8)
-      text("★", cxA, cyA - 31, { color: COL.flood });
+      text("★", cxA, cyA - Math.round(31 * FIG), { color: COL.flood });
 
     const holding = p.hasBall && p.mot !== "down" && frame !== "throwIt" && frame !== "release";
     // A man reaching for a catch reaches at the ball, not at a fixed pose.
@@ -4100,17 +4195,22 @@ function drawPlayers(dt) {
   }
 
   fxDrawTrail();
+  drawBallTrack(sim);
 
   const b = sim.ball;
-  if (b.state === "air" || b.state === "loose") {
+  // A rolling ball is drawn off FX, and by then the simulation has already
+  // called the ball dead — so "dead with a roll running" has to count too.
+  if (b.state === "air" || b.state === "loose" || FX.loose) {
     const L = FX.loose;
     const bx = scrX(L ? L.y : b.y), by = scrY(L ? L.x : b.x);
     const lift = (L ? L.h : b.h) * PPY * 0.9;
-    ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(D(bx), D(by), D(2.6), D(1.1), 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(0,0,0,.28)"; ctx.fill();
-    ctx.restore();
+    if (b.state !== "air") {
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(D(bx), D(by), D(2.6), D(1.1), 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,.28)"; ctx.fill();
+      ctx.restore();
+    }
     // A ball in flight turns over, one skidding across the grass rolls, and
     // one that has come to rest lies still.
     drawBall(bx, by, lift + 2, b.state === "air" ? b.tt * 9 : L ? L.spin : 0);
@@ -4471,7 +4571,7 @@ function drawKick() {
     const cxA = scrX(pl.y), cyA = scrY(pl.x);
     ctx.save();
     ctx.beginPath();
-    ctx.ellipse(D(cxA), D(cyA), D(4.6), D(1.8), 0, 0, Math.PI * 2);
+    ctx.ellipse(D(cxA), D(cyA), D(4.6 * FIG), D(1.8 * FIG), 0, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(0,0,0,.34)"; ctx.fill();
     ctx.restore();
     const build = pl.role === "line" ? "OL" : pl.role === "kicker" ? "K" : "LB";
