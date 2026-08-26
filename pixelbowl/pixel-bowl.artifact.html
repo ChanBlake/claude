@@ -156,7 +156,7 @@ html, body {
 /* The build, shown on the title screen. It is here so that "am I actually
    running the new one?" is a question you can answer by looking, rather than
    by clearing site data and hoping. `tools/stamp.py` sets it. */
-const VERSION = "2026-08-26.d5fb134";
+const VERSION = "2026-08-26.f5ed2cd";
 
 const CFG = {
   // Field, in yards. Narrowed from regulation: on a portrait phone a
@@ -171,9 +171,11 @@ const CFG = {
   // snapped so one art pixel is a whole number of device pixels, which is what
   // keeps sprites crisp instead of shimmering.
   artH: 230,
-  // Yards of field width kept on screen. Less than the full 30, so the camera
-  // is zoomed in and follows the ball across the field as well as along it.
-  visibleW: 23,
+  // Yards kept on screen across the field. This is the zoom. It used to be
+  // twenty-three of the thirty, which put the touchlines off screen and made
+  // the whole thing feel like it was played in a corridor. At twenty-nine
+  // plus the aprons you can see both sidelines and what is standing on them.
+  visibleW: 36,
 
   // Movement, yards per second. These were near real-life numbers, which is
   // the wrong target: the field is narrowed to thirty yards and the camera
@@ -3228,6 +3230,77 @@ function panel(x, y, w, h, fill = COL.panel, edge = COL.edge) {
 }
 
 /* ---- the field, baked once --------------------------------------- */
+/* ---- what is standing on the touchline ------------------------------
+   Baked into the field texture rather than drawn every frame, because
+   none of it moves: a cinder track, a bench either side in the club's
+   own colours, and a row of very small people watching. At four yards
+   deep and seven pixels tall a person is a head, a shirt and two legs,
+   which at this distance is all a person is.
+   ------------------------------------------------------------------ */
+function drawApron(R, w, h, apron, lip) {
+  const near = h - lip;
+  // The track, and a lip of shadow where it meets the grass.
+  R(0, 0, w, apron, "#2A2F26");
+  R(0, near, w, lip, "#2A2F26");
+  R(0, apron - 2, w, 2, "#1C2019");
+  R(0, near, w, 2, "#1C2019");
+
+  // A seeded shuffle, so the crowd is the same every time this is baked and
+  // does not crawl about when the field is rebuilt mid-drive.
+  let seed = 0x9e3779b9;
+  const rnd = () => {
+    seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+    return ((seed >>> 0) % 1000) / 1000;
+  };
+
+  // A hoarding along the back of the track, then the benches, then people.
+  R(0, 0, w, 3, "#161A22");
+  for (let x = 0; x < w; x += 34) R(x + 2, 0, 26, 3, rnd() < 0.5 ? "#243040" : "#1E2A38");
+
+  // A bench each, on the club's own half, and ten yards long rather than a
+  // fraction of the whole canvas — which made them twenty-yard gold girders.
+  const my = G.st.my, opp = G.st.opp;
+  for (const [fy, club] of [[FIELD.ownGoal + 20, my], [FIELD.oppGoal - 30, opp]]) {
+    const a = fieldX(fy), b2 = fieldX(fy + 10);
+    const x0 = Math.min(a, b2), ww = Math.abs(b2 - a);
+    R(x0, apron - 8, ww, 1, "#15180F");
+    R(x0, apron - 7, ww, 2, club.trim);
+    R(x0, apron - 5, ww, 1, "#15180F");
+    // Two coaches standing over it, in dark club colours.
+    for (const dx of [ww * 0.2, ww * 0.72]) {
+      R(x0 + dx, apron - 13, 3, 5, club.jersey);
+      R(x0 + dx, apron - 8, 1, 3, "#15180F");
+      R(x0 + dx + 2, apron - 8, 1, 3, "#15180F");
+      R(x0 + dx, apron - 16, 3, 3, "#0F1310");
+    }
+  }
+
+  // The people. Small enough that a person is a head, a shirt and two legs,
+  // which at this distance is all a person is.
+  for (let x = 4; x < w - 4; x += 4) {
+    const middle = 1 - Math.abs(x / w - 0.5) * 1.4;
+    if (rnd() > 0.42 + middle * 0.45) continue;
+    const py = 4 + Math.round(rnd() * Math.max(1, apron - 15));
+    const r = rnd();
+    const shirt = r < 0.4 ? my.jersey : r < 0.75 ? opp.jersey
+                : r < 0.88 ? my.trim : "#3A4753";
+    R(x, py + 3, 3, 4, shirt);
+    R(x, py + 7, 1, 2, "#15180F");
+    R(x + 2, py + 7, 1, 2, "#15180F");
+    R(x, py, 3, 3, "#0F1310");
+    R(x, py + 1, 3, 2, rnd() < 0.5 ? "#C98F63" : "#8A5F3C");
+  }
+
+  // Pylons at the four corners of the end zones.
+  for (const fy of [FIELD.ownGoal, FIELD.oppGoal]) {
+    const gx = Math.round(fieldX(fy));
+    for (const ey of [apron, near - 3]) {
+      R(gx - 1, ey, 3, 3, "#0E1114");
+      R(gx - 1, ey, 2, 2, "#F0742A");
+    }
+  }
+}
+
 function buildField() {
   const key = G.st.my.ab + G.st.opp.ab + "|" + VIEWH + "|" + UNIT + "|" + driveRight();
   if (fieldKey === key) return;
@@ -3236,7 +3309,9 @@ function buildField() {
   // A margin of turf beyond each back line, so the camera can pan far enough
   // to show the goalposts instead of pinning them to the screen edge.
   const w = Math.ceil((FIELD.L + FIELD_MARGIN * 2) * PPY);
-  const h = Math.ceil(FIELD.W * PPY);
+  const h = Math.ceil((FIELD.W + SIDE_TOP + SIDE_BOT) * PPY);
+  const apron = Math.round(SIDE_TOP * PPY);      // rows of touchline up top
+  const lip = Math.round(SIDE_BOT * PPY);        // ...and the sliver below
   fieldCv = document.createElement("canvas");
   fieldCv.width = w; fieldCv.height = h;
   const g = fieldCv.getContext("2d");
@@ -3254,16 +3329,19 @@ function buildField() {
     const a = X(fyA), b = X(fyB);
     R(Math.min(a, b), y, Math.abs(b - a), hh, c);
   };
-  const Y = fx => (FIELD.W - fx) * PPY;        // field width  → canvas row
+  const Y = fx => (FIELD.W - fx + SIDE_TOP) * PPY;      // across the field → row
 
+  const gh = h - apron - lip;                  // the playing surface itself
   R(0, 0, w, h, COL.turfDark);                 // the margin, behind the posts
-  band(0, FIELD.L, 0, h, COL.turf);
+  band(0, FIELD.L, apron, gh, COL.turf);
   for (let y = FIELD.ownGoal; y < FIELD.oppGoal; y += 10)
-    band(y + 5, y + 10, 0, h, COL.mow);
+    band(y + 5, y + 10, apron, gh, COL.mow);
 
   // Your end zone sits behind you and theirs in front, whichever way that is.
-  band(0, FIELD.ownGoal, 0, h, G.st.my.jersey);
-  band(FIELD.oppGoal, FIELD.L, 0, h, G.st.opp.jersey);
+  band(0, FIELD.ownGoal, apron, gh, G.st.my.jersey);
+  band(FIELD.oppGoal, FIELD.L, apron, gh, G.st.opp.jersey);
+
+  drawApron(R, w, h, apron, lip);
 
   // End-zone lettering, rotated to run up the back of each zone.
   const nameFor = (t, cxArt, flip) => {
@@ -3302,8 +3380,8 @@ function buildField() {
     }
   }
   // Sidelines.
-  band(0, FIELD.L, 0, 1, COL.chalk);
-  band(0, FIELD.L, h - 1, 1, COL.chalk);
+  band(0, FIELD.L, apron, 1, COL.chalk);
+  band(0, FIELD.L, h - lip - 1, 1, COL.chalk);
 
   // Goalposts on both back lines, drawn the same shape the kick screen draws
   // them so they do not change when you line one up.
@@ -3328,6 +3406,12 @@ function buildField() {
 
 /* ---- camera ------------------------------------------------------ */
 const FIELD_MARGIN = 9;      // yards of turf drawn beyond each back line
+// The aprons are lopsided on purpose. Everything worth looking at on a
+// touchline — the benches, the people — goes on the FAR one, where it sits
+// behind the play instead of in front of it; the near side gets a lip. With
+// `visibleW` set to the whole lot, the across-field camera has nothing left
+// to do and stops moving, which is one less thing sliding about under you.
+const SIDE_TOP = 4.5, SIDE_BOT = 1.5;
 let camX = 0, camY = 0;
 
 /* ---- which way you attack ------------------------------------------
@@ -3363,7 +3447,7 @@ function focusX() {
 }
 function updateCamera(dt, snap) {
   const fieldW = (FIELD.L + FIELD_MARGIN * 2) * PPY;
-  const fieldH = FIELD.W * PPY;
+  const fieldH = (FIELD.W + SIDE_TOP + SIDE_BOT) * PPY;
   // The ball sits behind the action so you can see where you are going. On a
   // turnover the play is running the other way, so the bias flips with it —
   // otherwise the return you are chasing happens in the narrow strip of screen
@@ -3372,7 +3456,7 @@ function updateCamera(dt, snap) {
   if (driveRight()) lead = 1 - lead;
   const tx = clamp(fieldX(focusY()) - ARTW * lead,
                    0, Math.max(0, fieldW - ARTW));
-  const ty = clamp((FIELD.W - focusX()) * PPY - VIEWH * 0.5,
+  const ty = clamp((FIELD.W - focusX() + SIDE_TOP) * PPY - VIEWH * 0.5,
                    0, Math.max(0, fieldH - VIEWH));
   if (snap) { camX = tx; camY = ty; return; }
   const k = 1 - Math.pow(0.0016, dt);
@@ -3382,7 +3466,7 @@ function updateCamera(dt, snap) {
 }
 // Field point → screen. These two are the entire rotation.
 const scrX = fy => fieldX(fy) - camX;
-const scrY = fx => VIEWTOP + (FIELD.W - fx) * PPY - camY;
+const scrY = fx => VIEWTOP + (FIELD.W - fx + SIDE_TOP) * PPY - camY;
 
 /* ---- effects ------------------------------------------------------
    Small, cheap, and driven entirely by watching the simulation rather
@@ -3897,7 +3981,7 @@ function drawFigure(p, team, pose, cx, cy, faceLeft, phase, holding, fallSide) {
    and no more. Nothing else on the screen is measured against him, so
    making him bigger costs no layout anywhere.
    ------------------------------------------------------------------ */
-const FIG = 1.24;
+const FIG = 1.0;
 
 const POST = "#F2D53C", POST_LIT = "#FFF4A0", POST_DARK = "#7A5D0E";
 function goalPost(gx, y0, y1) {
