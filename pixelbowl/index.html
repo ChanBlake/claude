@@ -2884,7 +2884,11 @@ function resize() {
   // Landscape game: the field's width fits the screen's height.
   NEEDS_ROTATE = cssW < cssH * 1.15;
 
-  UNIT = Math.max(2, Math.round(cssH * dpr / CFG.artH));
+  // Held the wrong way up, the short side is the width — sizing off the long
+  // one gave a buffer a hundred pixels across and the turn-your-phone card
+  // ran off both edges of it.
+  const shortSide = NEEDS_ROTATE ? cssW : cssH;
+  UNIT = Math.max(2, Math.round(shortSide * dpr / CFG.artH));
   ARTH = Math.floor(cssH * dpr / UNIT);
   ARTW = Math.floor(cssW * dpr / UNIT);
 
@@ -3296,6 +3300,9 @@ function blob(x, y, r, col, edge = 0.8) {
    Hand positions are in FORWARD-SPACE — +x is the way he is facing —
    so no pose has to know which way he is pointed.
    ------------------------------------------------------------------ */
+// Radians of leg swing per yard covered. At 4.4 a man at full speed took five
+// strides a second, which is a sprint cadence played at double speed.
+const STRIDE = 2.6;
 const EASE = (a, b, t) => a + (b - a) * t;
 const smooth = t => t * t * (3 - 2 * t);
 const approach = (cur, tgt, per, dt) => cur + (tgt - cur) * (1 - Math.pow(per, dt));
@@ -3358,7 +3365,7 @@ function animateFigure(p, pose, dt, sim, reach) {
   } else if (pose === "run") {
     // Arms drive: they swing through a real arc rather than sliding sideways,
     // and they rise as they come forward.
-    const sw = Math.sin(p._stride * 4.4);
+    const sw = Math.sin(p._stride * STRIDE);
     fx = sw * 4.2; fy = 2.2 - Math.max(0, sw) * 2.4;
     bx = -sw * 4.2; by = 2.2 - Math.max(0, -sw) * 2.4;
     lean = 0.9;
@@ -3680,7 +3687,7 @@ function drawPlayers(dt) {
       reach = { x: rx * cap, y: ry * cap };
     }
     animateFigure(p, frame, dt, sim, reach);
-    drawFigure(p, team, frame, cxA, cyA, faceLeft, p._stride * 4.4, holding,
+    drawFigure(p, team, frame, cxA, cyA, faceLeft, p._stride * STRIDE, holding,
                fallSide || (faceLeft ? -1 : 1));
   }
 
@@ -3832,12 +3839,20 @@ function drawBanner() {
 
 function drawRotatePrompt() {
   rect(0, 0, ARTW, ARTH, COL.night);
-  const cx = ARTW / 2, cy = ARTH / 2;
+  const cx = Math.round(ARTW / 2), cy = Math.round(ARTH / 2);
+  // This is the one screen drawn on a portrait buffer, so nothing here may
+  // assume a landscape width: every size is picked from ARTW.
+  const head = "TURN YOUR PHONE", sub2 = "PIXEL BOWL IS PLAYED SIDEWAYS";
+  const hs = Math.max(1, Math.min(3, Math.floor((ARTW - 12) / textW(head))));
+  const ss = Math.max(1, Math.min(2, Math.floor((ARTW - 12) / textW(sub2))));
+
   // A little phone, lying down.
-  panel(cx - 22, cy - 26, 44, 26, COL.panel, COL.flood);
-  rect(cx - 16, cy - 20, 32, 14, COL.turf);
-  text("TURN YOUR PHONE", cx, cy + 12, { scale: 2, color: COL.flood });
-  text("PIXEL BOWL IS PLAYED SIDEWAYS", cx, cy + 30, { color: COL.dim });
+  const pw = Math.min(52, Math.round(ARTW * 0.4)), ph = Math.round(pw * 0.62);
+  panel(cx - Math.round(pw / 2), cy - ph - 16, pw, ph, COL.panel, COL.flood);
+  rect(cx - Math.round(pw / 2) + 5, cy - ph - 11, pw - 10, ph - 10, COL.turf);
+
+  text(head, cx, cy - 2, { scale: hs, color: COL.flood });
+  text(sub2, cx, cy + 6 + GH * hs, { scale: ss, color: COL.dim });
 }
 
 /* ===================================================================
