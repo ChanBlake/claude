@@ -5,13 +5,15 @@
 # full-screen app with its own icon that opens with no signal. No developer
 # certificate, no seven-day expiry, no Mac.
 #
-# One-time setup: repository Settings -> Pages -> Source: "GitHub Actions".
+# `configure-pages` turns Pages on by itself the first time this runs, so
+# there is nothing to click in the repository settings.
 name: Pages
 
 on:
   push:
-    branches: [main]
-    paths: ["pixelbowl/**", ".github/workflows/pages.yml"]
+    branches:
+      - main
+      - "claude/pixel-football-ios-game-kmiufs"
   workflow_dispatch:
 
 permissions:
@@ -37,6 +39,8 @@ jobs:
           cp pixelbowl/index.html pixelbowl/manifest.webmanifest pixelbowl/sw.js _site/
           cp pixelbowl/icon-*.png _site/
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
