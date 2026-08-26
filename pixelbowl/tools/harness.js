@@ -60,7 +60,7 @@ function loadGame({ width = 844, height = 390, file = null } = {}) {
       newGame, giveUs, applyResult, snapPlay, punt, beginKick, resolveKick,
       startTheirDrive, advanceTheirDrive, simulateTheirDrive, downText, fieldLabel,
       fgDistance, inFGRange, update, draw, handleTap, hitTest, resize,
-      textW, clamp, FX, BUILD, drawFigure, OFF_POS, DEF_POS, fullAlign,
+      textW, clamp, FX, BUILD, drawFigure, OFF_POS, DEF_POS, fullAlign, callScheme,
       fieldX, fyAtScreen, scrX, scrY, driveRight, noteTendency,
       overallOf, newSeasonLeague, signDraftPick, standings, makeSchedule, myFixture,
       myDraftSlot, runDraft, DRAFT_PICKS,
