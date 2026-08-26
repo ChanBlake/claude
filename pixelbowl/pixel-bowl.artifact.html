@@ -1775,12 +1775,22 @@ function makePlay(o) {
 
     if (j.t === "drop" || j.t === "hand") return dropbackAI(p, j.t === "drop" ? j.depth : 0);
     if (j.t === "carry") { if (!followRoute(p, 0.7)) setWant(p, 0, dirY()); return; }
+    // A man running a route is RUNNING. `sprint` was only ever set by the
+    // defence and by the thumb, so every defender in coverage was fourteen
+    // percent quicker than the man he was covering, and the closing speed
+    // looked wrong because it was wrong. It goes off again the moment his
+    // route runs out, so nobody sprints on the spot.
     if (j.t === "delay") {
-      if (p.delay > 0) return protectAI(p);
-      if (!followRoute(p, 1.0)) return driftOpen(p);
+      if (p.delay > 0) { p.sprint = false; return protectAI(p); }
+      p.sprint = followRoute(p, 1.0);
+      if (!p.sprint) driftOpen(p);
       return;
     }
-    if (j.t === "route") { if (!followRoute(p, 1.0)) driftOpen(p); return; }
+    if (j.t === "route") {
+      p.sprint = followRoute(p, 1.0);
+      if (!p.sprint) driftOpen(p);
+      return;
+    }
     if (j.t === "pass") return protectAI(p);
     if (j.t === "block") return runBlockAI(p, j.bias || 0);
     void aiming;
@@ -1805,7 +1815,17 @@ function makePlay(o) {
     if (S.ball.state !== "air") return false;
     const j = p.job;
     if (j.t !== "route" && j.t !== "delay") return false;
-    if (dist(p.x, p.y, S.ball.tx, S.ball.ty) > reachRadius(p)) return false;
+    const mine = dist(p.x, p.y, S.ball.tx, S.ball.ty);
+    if (mine > reachRadius(p)) return false;
+    // Only the man it is actually going to. Everyone within reach used to
+    // break on it, so one throw over the middle pulled three receivers off
+    // their routes at once and you could not tell who it was for until it
+    // landed.
+    for (const q of P) {
+      if (q === p || q.side !== "off" || q.mot === "down") continue;
+      if (q.job.t !== "route" && q.job.t !== "delay") continue;
+      if (dist(q.x, q.y, S.ball.tx, S.ball.ty) < mine) return false;
+    }
     setWant(p, S.ball.tx - p.x, S.ball.ty - p.y);
     return true;
   }
@@ -1853,7 +1873,11 @@ function makePlay(o) {
     const qb = P[0];
 
     // Scramble drill.
-    if (!S.threw && qb.hasBall && (S.tucked || Math.abs(qb.x - spot.x) > 5.5)) {
+    // A bootleg is a design, not a scramble. Requiring him to have tucked it
+    // or to have been out there a while stops a called rollout from pulling
+    // the whole route tree off its stem.
+    const late = S.t > play.develop + 1.4;
+    if (!S.threw && qb.hasBall && (S.tucked || (late && Math.abs(qb.x - spot.x) > 7))) {
       const side = Math.sign(qb.x - FIELD.W / 2) || 1;
       const tx = clamp(qb.x + side * 5, 2, FIELD.W - 2);
       const ty = clamp(Math.min(p.y, qb.y + 10), S.los + 1, FIELD.oppGoal + 4);
@@ -3362,7 +3386,8 @@ const scrY = fx => VIEWTOP + (FIELD.W - fx) * PPY - camY;
    trail so you can read where it is going.
    ------------------------------------------------------------------ */
 const FX = { puffs: [], trail: [], catchPose: null, throwPose: 0, freeze: 0,
-             prevBall: "dead", prevCaught: false, prevThrew: false };
+             prevBall: "dead", prevCaught: false, prevThrew: false,
+             airDir: { x: 0, y: 1 }, loose: null };
 
 function fxReset() {
   FX.puffs.length = 0; FX.trail.length = 0;
@@ -3384,7 +3409,7 @@ function fxUpdate(dt, sim) {
   }
   FX.throwPose = Math.max(0, FX.throwPose - dt);
   FX.freeze = Math.max(0, FX.freeze - dt);
-  if (!sim) { FX.trail.length = 0; FX.prevBall = "dead"; return; }
+  if (!sim) { FX.trail.length = 0; FX.prevBall = "dead"; FX.loose = null; return; }
 
   // The follow-through starts on the frame the ball leaves his hand.
   if (sim.threw && !FX.prevThrew) FX.throwPose = CFG.followTime;
@@ -3407,9 +3432,36 @@ function fxUpdate(dt, sim) {
   }
   FX.prevCaught = sim.completed;
 
-  // A ball that went from the air to dead hit the grass.
-  if (FX.prevBall === "air" && b.state === "dead") puffAt(b.x, b.y, 5, 1.6);
+  // Remember which way the throw was travelling, so a ball that is not caught
+  // carries on in the direction it was going instead of dying where it lands.
+  if (b.state === "air") {
+    const dx = b.tx - b.fx, dy = b.ty - b.fy, l = Math.hypot(dx, dy) || 1;
+    FX.airDir = { x: dx / l, y: dy / l };
+  }
+
+  // A ball that went from the air to dead hit the grass. It bounces, and it
+  // rolls, and it takes a moment about it — a pass that simply vanished on
+  // the frame it arrived was the flattest thing in the game.
+  if (FX.prevBall === "air" && b.state === "dead") {
+    puffAt(b.x, b.y, 5, 1.6);
+    const sp = 5.5 + Math.random() * 2.5;
+    FX.loose = {
+      x: b.x, y: b.y, h: 1.1,
+      vx: FX.airDir.x * sp * 0.35 + (Math.random() - 0.5) * 1.6,
+      vy: FX.airDir.y * sp,
+      vh: -5.5, spin: 0, t: 0,   // h is height, so coming down is negative
+    };
+    // Whoever was reaching for it is caught reaching, for a beat.
+    let best = null, bd = 2.4;
+    for (const p of sim.P) {
+      if (p.side !== "off" || p.mot === "down") continue;
+      const d = dist(p.x, p.y, b.x, b.y);
+      if (d < bd) { bd = d; best = p; }
+    }
+    if (best) FX.catchPose = { id: best.id, t: 0.45 };
+  }
   FX.prevBall = b.state;
+
 
   // Anyone who just hit the deck kicks up turf.
   for (const p of sim.P) {
@@ -3423,6 +3475,33 @@ function fxUpdate(dt, sim) {
       if (h && h.deep >= 1) FX.freeze = 0.085;
     }
     else if (p.mot !== "down") p._puffed = false;
+  }
+
+  rollLoose(dt);
+}
+
+// The bounce and the roll, kept out of the main update so it can also run
+// through a dead ball while the play object is being torn down.
+function rollLoose(dt) {
+  const L = FX.loose;
+  if (L) {
+    L.t += dt;
+    L.vh -= 26 * dt;
+    L.h += L.vh * dt;
+    if (L.h <= 0) {
+      L.h = 0;
+      // A football does not bounce true. It kicks up, loses most of its pace,
+      // and the next one is smaller.
+      if (L.vh < -1.2) { L.vh = -L.vh * 0.42; L.vx *= 0.6; L.vy *= 0.6; puffAt(L.x, L.y, 3, 1.2); }
+      else { L.vh = 0; }
+    }
+    const drag = L.h <= 0 ? Math.max(0, 1 - 3.4 * dt) : 1;
+    L.vx *= drag; L.vy *= drag;
+    L.x = clamp(L.x + L.vx * dt, 0, FIELD.W);
+    L.y = clamp(L.y + L.vy * dt, 0, FIELD.L);
+    // A ball on its side rolls end over end; one still in the air tumbles.
+    L.spin += (L.h > 0 ? 9 : Math.hypot(L.vx, L.vy) * 1.5) * dt;
+    if (L.t > 2.4 || (L.h <= 0 && Math.hypot(L.vx, L.vy) < 0.35 && L.t > 0.6)) FX.loose = null;
   }
 }
 
@@ -4024,15 +4103,17 @@ function drawPlayers(dt) {
 
   const b = sim.ball;
   if (b.state === "air" || b.state === "loose") {
-    const bx = scrX(b.y), by = scrY(b.x);
-    const lift = b.h * PPY * 0.9;
+    const L = FX.loose;
+    const bx = scrX(L ? L.y : b.y), by = scrY(L ? L.x : b.x);
+    const lift = (L ? L.h : b.h) * PPY * 0.9;
     ctx.save();
     ctx.beginPath();
     ctx.ellipse(D(bx), D(by), D(2.6), D(1.1), 0, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(0,0,0,.28)"; ctx.fill();
     ctx.restore();
-    // A ball in flight turns over; one on the floor does not.
-    drawBall(bx, by, lift + 2, b.state === "air" ? b.tt * 9 : 0);
+    // A ball in flight turns over, one skidding across the grass rolls, and
+    // one that has come to rest lies still.
+    drawBall(bx, by, lift + 2, b.state === "air" ? b.tt * 9 : L ? L.spin : 0);
   }
 }
 
