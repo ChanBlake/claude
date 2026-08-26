@@ -2253,39 +2253,85 @@ function buildOffseason(rng) {
     c.str = clamp(c.str + rng.int(-2, 2), -6, 9);
   }
 
-  // Three prospects at whatever you are thinnest at, plus the holes that
-  // retirement left. You pick one; the rest of the holes are filled by
-  // replacement-level bodies, which is what actually happens.
-  // Where you just lost somebody first, then wherever you are thinnest, then
-  // somewhere else entirely — three prospects at one position is not a
-  // decision, it is a formality.
-  // The kicker counts as a position you can be thin at, because he is one.
-  const thin = R.off.map((p, i) => ({ pos: ROSTER_POS[i], p }))
-    .concat([{ pos: "K", p: R.k }])
-    .filter(x => x.p)
-    .map(x => ({ pos: x.pos, ovr: overallOf(x.p) - (x.p.age > 30 ? 8 : 0) }))
-    .sort((a, b) => a.ovr - b.ovr).map(x => x.pos);
-  const wanted = [];
-  for (const pos of holes.concat(thin, ["WR", "RB", "TE", "OL", "K"])) {
-    if (wanted.length >= 3) break;
-    const need = holes.filter(h => h === pos).length;
-    if (!wanted.includes(pos) || wanted.filter(w => w === pos).length < need) wanted.push(pos);
-  }
-  const used = new Set(all.map(p => p.num));
+  // The draft is a league event, not a menu. Everybody picks, worst record
+  // first, so winning the Pixel Bowl costs you the top of the board — which is
+  // the only price the game asks you to pay for being good.
+  const order = standings().slice().reverse().map(r => r.ab);
+  const board = makeDraftClass(rng, all, DRAFT_PICKS + 4);
+  void holes;
+  return {
+    year: LEAGUE.year,
+    retired: gone.map(p => ({ n: p.first + " " + p.last, pos: p.pos, age: p.age })),
+    aged: aged.filter(a => a.now !== a.was).slice(0, 8),
+    order, board, at: 0, taken: [], done: false,
+  };
+}
+
+const DRAFT_PICKS = 8;              // one round, one pick each
+
+// A class with a gradient: the top of the board is genuinely better than the
+// bottom, which is what makes a draft slot worth anything.
+function makeDraftClass(rng, roster, n) {
+  const used = new Set(roster.filter(Boolean).map(p => p.num));
   const seen = new Set();
-  const classOf = wanted.slice(0, 3).map(pos => {
+  // Every position is represented, quarterbacks included — a class you cannot
+  // find a passer in is not a class.
+  const spread = ["QB", "WR", "RB", "OL", "TE", "WR", "QB", "OL", "RB", "TE", "K", "WR"];
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const pos = spread[i % spread.length];
+    const tier = 7 - Math.floor(i / 2) * 1.6 + rng.bell() * 2.5;
     let p;
-    for (let i = 0; i < 12; i++) {
-      p = makePerson(pos, 2 + rng.int(-3, 6), rng, used, rng.int(21, 23));
+    for (let k = 0; k < 12; k++) {
+      p = makePerson(pos, tier, rng, used, rng.int(21, 23));
       if (!seen.has(p.first)) break;
     }
     seen.add(p.first);
     p.pot = Math.round(clamp(overallOf(p) + rng.int(8, 26), 55, 99));
-    return p;
-  });
-  return { year: LEAGUE.year, retired: gone.map(p => ({ n: p.first + " " + p.last, pos: p.pos, age: p.age })),
-           aged: aged.filter(a => a.now !== a.was).slice(0, 8), draft: classOf };
+    out.push(p);
+  }
+  // Ordered the way a scouting board is: by what he might become, not by what
+  // he is on the day.
+  return out.sort((a, b) => (b.pot * 2 + overallOf(b)) - (a.pot * 2 + overallOf(a)));
 }
+
+// What a club needs, so its pick reads as a decision rather than a dice roll.
+function clubNeedScore(ab, p) {
+  if (ab === LEAGUE.my) return 0;
+  const c = LEAGUE.clubs[ab];
+  // Other clubs have no roster to inspect, so they value ceiling, then the
+  // player, then a nudge toward positions that matter most on this field.
+  const weight = p.pos === "QB" ? 1.12 : p.pos === "WR" ? 1.06 : p.pos === "K" ? 0.7 : 1;
+  return (p.pot * 1.6 + overallOf(p)) * weight + (c.str < 0 ? 6 : 0);
+}
+
+// Step the draft forward until it is your turn, or until it is over.
+function runDraft() {
+  const o = LEAGUE.offseason;
+  if (!o || o.done) return;
+  const rng = makeRNG((LEAGUE.year * 6151 + o.at * 97) >>> 0);
+  while (o.at < DRAFT_PICKS) {
+    const ab = o.order[o.at % o.order.length];
+    if (ab === LEAGUE.my) return;                 // your board, your call
+    const best = o.board
+      .map((p, i) => ({ p, i, v: clubNeedScore(ab, p) + rng.bell() * 6 }))
+      .sort((x, y) => y.v - x.v)[0];
+    if (best) {
+      o.board.splice(best.i, 1);
+      o.taken.push({ ab, pos: best.p.pos, name: best.p.last, ovr: overallOf(best.p), pick: o.at + 1 });
+      // A good pick makes them a little better next year.
+      const c = LEAGUE.clubs[ab];
+      c.str = clamp(c.str + (best.p.pot >= 90 ? 1 : 0), -6, 9);
+    }
+    o.at++;
+  }
+  o.done = true;
+}
+
+const myDraftSlot = () => {
+  const o = LEAGUE.offseason;
+  return o ? o.order.indexOf(LEAGUE.my) + 1 : 0;
+};
 
 // Anywhere still empty after the draft gets a replacement-level body, because
 // you cannot take the field with six men.
@@ -2298,22 +2344,36 @@ function fillHoles(rng) {
   if (!R.k) R.k = makePerson("K", -3, rng, used, rng.int(23, 30));
 }
 
-// Walking away is a real choice when nobody on offer beats what you have.
-function passOnDraft() { startNextSeason(); }
+// Walking away is a real choice when nobody left on the board beats what you
+// have. The pick is spent either way — you do not get to keep it.
+function passOnDraft() {
+  const o = LEAGUE.offseason;
+  if (!o || o.done) return;
+  o.taken.push({ ab: LEAGUE.my, pos: "-", name: "PASSED", ovr: 0, pick: o.at + 1 });
+  o.at++;
+  runDraft();
+  saveLeague();
+}
 
 function signDraftPick(pick) {
-  const R = LEAGUE.roster;
+  const R = LEAGUE.roster, o = LEAGUE.offseason;
+  if (!o || o.done) return;
+  const i = o.board.indexOf(pick);
+  if (i >= 0) o.board.splice(i, 1);
+  o.taken.push({ ab: LEAGUE.my, pos: pick.pos, name: pick.last, ovr: overallOf(pick), pick: o.at + 1 });
+  o.at++;
   if (pick.pos === "K") { R.k = pick; }
   else {
     // He takes the job from whoever is worst at his position — which after a
     // retirement is the replacement-level body standing in for the man who left.
-    const cands = R.off.map((p, i) => ({ p, i })).filter(x => ROSTER_POS[x.i] === pick.pos);
+    const cands = R.off.map((p, i2) => ({ p, i2 })).filter(x => ROSTER_POS[x.i2] === pick.pos);
     if (cands.length) {
       cands.sort((a, b) => overallOf(a.p) - overallOf(b.p));
-      R.off[cands[0].i] = pick;
+      R.off[cands[0].i2] = pick;
     }
   }
-  startNextSeason();
+  runDraft();
+  saveLeague();
 }
 
 function startNextSeason() {
@@ -2371,6 +2431,7 @@ function advancePlayoffs(rng) {
     if (f.winner === LEAGUE.my) LEAGUE.title++;
     LEAGUE.phase = "offseason";
     LEAGUE.offseason = buildOffseason(rng);
+    runDraft();                     // everyone above you picks before you see it
   }
 }
 
@@ -3741,51 +3802,103 @@ function drawOffseason() {
   const o = LEAGUE.offseason;
   rect(0, 0, ARTW, ARTH, COL.night);
   if (!o) { button("hub", ARTW / 2 - 40, ARTH - 20, 80, 16, "BACK"); return; }
-  text("OFF-SEASON", 10, 8, { align: -1, scale: 2, color: COL.flood });
+  text("OFF-SEASON", 8, 6, { align: -1, scale: 2, color: COL.flood });
   const champ = LEAGUE.champion ? teamBy(LEAGUE.champion) : null;
-  text(champ ? (LEAGUE.champion === LEAGUE.my ? "YOU WON THE PIXEL BOWL" : champ.city + " WON THE PIXEL BOWL") : "",
-       ARTW - 10, 12, { align: 1, color: LEAGUE.champion === LEAGUE.my ? COL.good : COL.dim });
+  text(champ ? (LEAGUE.champion === LEAGUE.my ? "YOU WON THE PIXEL BOWL"
+                                              : champ.city + " WON THE PIXEL BOWL") : "",
+       ARTW - 8, 10, { align: 1, color: LEAGUE.champion === LEAGUE.my ? COL.good : COL.dim });
 
-  const lw = Math.round(ARTW * 0.36);
-  panel(10, 30, lw, ARTH - 54, COL.night2, COL.edge);
-  text("A YEAR OLDER", 10 + lw / 2, 35, { color: COL.flood });
-  let y = 50;
+  // Left: what a year did to the men you already have.
+  const lw = 132;
+  panel(8, 26, lw, ARTH - 52, COL.night2, COL.edge);
+  text("A YEAR OLDER", 8 + lw / 2, 31, { color: COL.flood });
+  let y = 46;
   o.retired.forEach(r => {
-    text(r.pos + " " + r.n.slice(0, 14), 18, y, { align: -1, color: COL.dim, shadow: false });
-    text("RETIRED " + r.age, 10 + lw - 8, y, { align: 1, color: COL.bad, shadow: false });
+    text(r.pos + " " + r.n.slice(0, 11), 14, y, { align: -1, color: COL.dim, shadow: false });
+    text("RETIRED", 8 + lw - 6, y, { align: 1, color: COL.bad, shadow: false });
     y += 12;
   });
   o.aged.forEach(a => {
     const up = a.now > a.was;
-    text(a.p.pos + " " + a.p.last.slice(0, 12), 18, y, { align: -1, color: COL.ink, shadow: false });
-    text((up ? "+" : "") + (a.now - a.was) + "  > " + a.now, 10 + lw - 8, y,
+    text(a.p.pos + " " + a.p.last.slice(0, 9), 14, y, { align: -1, color: COL.ink, shadow: false });
+    text((up ? "+" : "") + (a.now - a.was) + " > " + a.now, 8 + lw - 6, y,
          { align: 1, color: up ? COL.good : COL.bad, shadow: false });
     y += 12;
   });
-  if (!o.retired.length && !o.aged.length) text("NOTHING CHANGED", 10 + lw / 2, 60, { color: COL.dim });
+  if (!o.retired.length && !o.aged.length)
+    text("NOBODY CHANGED", 8 + lw / 2, 52, { color: COL.dim });
 
-  const rx = 10 + lw + 10, rw = ARTW - rx - 10;
-  text("YOUR PICK — ONE OF THREE", rx, 34, { align: -1, color: COL.flood });
-  const cw = Math.round((rw - 12) / 3), ch = 118;
-  o.draft.forEach((p, i) => {
-    const x = rx + i * (cw + 6);
-    HOT.push({ id: "draft:" + i, x, y: 46, w: cw, h: ch });
-    const hot = Input.holdId === "draft:" + i;
-    panel(x, 46, cw, ch, hot ? COL.panelHi : COL.panel, COL.edge);
-    rect(x, 46, cw, 3, posColour(p.pos));
-    text(p.pos, x + cw / 2, 54, { scale: 2, color: posColour(p.pos) });
-    text(p.first, x + cw / 2, 74, { color: COL.dim, shadow: false });
-    text(p.last.slice(0, 10), x + cw / 2, 86, { color: COL.ink, shadow: false });
-    text("AGE " + p.age, x + cw / 2, 102, { color: COL.dim, shadow: false });
-    text(String(overallOf(p)), x + cw / 2, 118, { scale: 3, color: COL.ink });
-    text("CEILING " + p.pot, x + cw / 2, 138, { color: COL.flood, shadow: false });
-    const gap = p.pot - overallOf(p);
-    text(gap > 18 ? "RAW" : gap > 9 ? "PROJECT" : "READY NOW", x + cw / 2, 150,
-         { color: COL.dim, shadow: false });
-  });
-  text("HE TAKES THE JOB FROM WHOEVER IS WORST AT HIS POSITION.", rx + rw / 2, 172,
-       { color: "#5D707D", shadow: false });
-  button("pass", rx + rw / 2 - 60, 186, 120, 18, "SIGN NOBODY");
+  // Right: the draft. Every club picks, worst record first, so where you pick
+  // is what last season bought you.
+  const rx = 8 + lw + 8, rw = ARTW - rx - 8;
+  const slot = myDraftSlot();
+  const mine = !o.done && o.order[o.at % o.order.length] === LEAGUE.my;
+  text("THE DRAFT", rx, 30, { align: -1, color: COL.flood, shadow: false });
+  const head = o.done ? "ALL " + DRAFT_PICKS + " PICKS IN"
+             : mine ? "PICK " + (o.at + 1) + " OF " + DRAFT_PICKS + "  ·  YOURS"
+             : "PICK " + (o.at + 1) + " OF " + DRAFT_PICKS;
+  text(head, rx + rw, 30, { align: 1, color: mine ? COL.ink : COL.dim, shadow: false });
+
+  if (!o.done) {
+    // Eight cards of what is left — a board other clubs have already been
+    // through, if you finished high enough for that to sting.
+    const cols = 4, gap = 4;
+    const cw = Math.floor((rw - gap * (cols - 1)) / cols), ch = 60;
+    o.board.slice(0, 8).forEach((p, i) => {
+      const x = rx + (i % cols) * (cw + gap), yy = 42 + Math.floor(i / cols) * (ch + gap);
+      if (mine) HOT.push({ id: "draft:" + i, x, y: yy, w: cw, h: ch });
+      const hot = Input.holdId === "draft:" + i;
+      panel(x, yy, cw, ch, hot ? COL.panelHi : COL.panel, COL.edge);
+      rect(x, yy, cw, 2, posColour(p.pos));
+      text(p.pos, x + 6, yy + 6, { align: -1, color: posColour(p.pos), shadow: false });
+      text("AGE " + p.age, x + cw - 6, yy + 6, { align: 1, color: COL.dim, shadow: false });
+      text(p.last.slice(0, 9), x + cw / 2, yy + 18, { color: COL.ink, shadow: false });
+      text(String(overallOf(p)), x + 8, yy + 30, { align: -1, scale: 2, color: COL.ink });
+      text("CEIL " + p.pot, x + cw - 6, yy + 34, { align: 1, color: COL.flood, shadow: false });
+      const room = p.pot - overallOf(p);
+      text(room > 18 ? "RAW" : room > 9 ? "PROJECT" : "READY NOW",
+           x + cw / 2, yy + 48, { color: COL.dim, shadow: false });
+    });
+    // Who has gone already. This is the whole point of a draft order: by the
+    // time a good club picks, the board has been through seven other hands.
+    const gone = o.taken.filter(t => t.ovr);
+    text(gone.length ? "GONE" : "NOBODY HAS PICKED YET", rx, 174,
+         { align: -1, color: COL.flood, shadow: false });
+    gone.slice(-8).forEach((t, i) => {
+      const perRow = 4, lead = 34;
+      const x = rx + lead + (i % perRow) * Math.floor((rw - lead) / perRow);
+      const yy = 174 + Math.floor(i / perRow) * 11;
+      const isMe = t.ab === LEAGUE.my;
+      text(t.ab + " " + t.pos + " " + t.ovr, x, yy,
+           { align: -1, color: isMe ? COL.flood : COL.dim, shadow: false });
+    });
+
+    if (mine) {
+      button("pass", rx + rw - 90, ARTH - 22, 90, 16, "PASS");
+      text("HE TAKES THE JOB OF WHOEVER IS WORST AT IT", rx, ARTH - 18,
+           { align: -1, color: "#5D707D", shadow: false });
+    } else {
+      button("advancedraft", rx + rw - 124, ARTH - 22, 124, 16, "LET THEM PICK", { primary: true });
+      const th = slot === 1 ? "ST" : slot === 2 ? "ND" : slot === 3 ? "RD" : "TH";
+      text("YOU PICK " + slot + th + " OF " + DRAFT_PICKS + "  ·  LAST SEASON DECIDED THAT",
+           rx, ARTH - 18, { align: -1, color: COL.dim, shadow: false });
+    }
+  } else {
+    // The board is gone. Here is where everybody went.
+    const cols = 2, cw = Math.floor(rw / cols);
+    o.taken.forEach((t, i) => {
+      const x = rx + (i % cols) * cw, yy = 44 + Math.floor(i / cols) * 14;
+      const isMe = t.ab === LEAGUE.my;
+      text(t.pick + ".", x + 4, yy, { align: -1, color: COL.dim, shadow: false });
+      text(t.ab, x + 24, yy, { align: -1, color: isMe ? COL.flood : COL.dim, shadow: false });
+      text(t.name === "PASSED" ? "PASSED" : t.pos + " " + t.name.slice(0, 9), x + 52, yy,
+           { align: -1, color: isMe ? COL.ink : COL.dim, shadow: false });
+      if (t.ovr) text(String(t.ovr), x + cw - 10, yy,
+                      { align: 1, color: isMe ? COL.ink : COL.dim, shadow: false });
+    });
+    button("startyear", rx + rw / 2 - 70, ARTH - 24, 140, 18,
+           "START YEAR " + (LEAGUE.year + 1), { primary: true });
+  }
 }
 
 
@@ -4049,10 +4162,12 @@ function handleTap(id) {
   if (SCREEN === "growth") { if (id === "hub") SCREEN = "hub"; return; }
   if (SCREEN === "offseason") {
     if (id === "hub") { SCREEN = "hub"; return; }
-    if (id === "pass") { passOnDraft(); saveLeague(); SCREEN = "hub"; return; }
+    if (id === "advancedraft") { runDraft(); saveLeague(); return; }
+    if (id === "pass") { passOnDraft(); return; }
+    if (id === "startyear") { startNextSeason(); saveLeague(); SCREEN = "hub"; return; }
     if (id.startsWith("draft:")) {
-      const pick = LEAGUE.offseason.draft[+id.slice(6)];
-      if (pick) { signDraftPick(pick); Sound.first(); SCREEN = "hub"; }
+      const pick = LEAGUE.offseason.board[+id.slice(6)];
+      if (pick) { signDraftPick(pick); Sound.first(); }
     }
     return;
   }

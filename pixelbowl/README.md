@@ -30,10 +30,16 @@ ratings the position lives on, so a lineman never develops soft hands for
 blocking well. Every point is named on the postgame screen.
 
 **And then they get old.** Under twenty-five a man gains on his own; past thirty
-he loses, his ceiling comes down with him, and eventually he goes. One draft
-pick an off-season, three prospects, and the right to sign nobody — a prospect
-takes the job from whoever is worst at his position, so signing one is a real
-decision rather than a formality.
+he loses, his ceiling comes down with him, and eventually he goes.
+
+**The draft is a league event, not a menu.** All eight clubs pick, one round,
+worst record first. You watch the board go and then take what is left, and a
+prospect takes the job from whoever is worst at his position — so signing one is
+a decision, not a formality. Winning the Pixel Bowl means picking eighth out of
+eight, which is the only price the game asks you to pay for being good. You can
+also pass, and spend the pick on nobody. Over a four-season test career the same
+club's slot slid from fourth to seventh as it got better, which is exactly what
+a draft order is for.
 
 `node tools/career.js` plays a whole career headlessly — every game, every
 screen, every tap — because a season's bugs only surface after an hour of play,

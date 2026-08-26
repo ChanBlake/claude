@@ -101,14 +101,26 @@ for (let year = 1; year <= +(process.env.YEARS || 3); year++) {
     } else if (A.SCREEN === "offseason") break;
     else step();
   }
-  // Off-season: look at the three prospects and take one.
+  // Off-season: watch the clubs above you pick, then take the best ceiling
+  // still on the board.
   step();
   if (A.SCREEN !== "offseason") { tap("offseason"); step(); }
   const o = A.LEAGUE.offseason;
   console.log(`\nYEAR ${year}: ${record}${made ? " (playoffs)" : ""}  champion ${A.LEAGUE.champion}` +
-    `  retired ${o.retired.length}  draft [${o.draft.map(p => p.pos + " " + A.overallOf(p) + "/" + p.pot).join(", ")}]`);
-  const best = o.draft.map((p, i) => ({ i, v: p.pot })).sort((a, b) => b.v - a.v)[0];
-  tap("draft:" + best.i); step();
+    `  retired ${o.retired.length}  you pick ${A.myDraftSlot()} of ${A.DRAFT_PICKS}`);
+  let g2 = 0;
+  while (A.SCREEN === "offseason" && g2++ < 40) {
+    step();
+    if (hot("advancedraft")) { tap("advancedraft"); step(); }
+    else if (hot("draft:0")) {
+      const best = o.board.slice(0, 8).map((p, i) => ({ i, v: p.pot * 2 + A.overallOf(p) }))
+        .sort((a, b) => b.v - a.v)[0];
+      tap("draft:" + best.i); step();
+    } else if (hot("startyear")) {
+      console.log("   " + o.taken.map(t => `${t.pick}.${t.ab} ${t.pos}${t.ovr ? " " + t.ovr : ""}`).join("  "));
+      tap("startyear"); step();
+    }
+  }
   if (A.SCREEN !== "hub") throw new Error("draft did not return to the hub: " + A.SCREEN);
 }
 

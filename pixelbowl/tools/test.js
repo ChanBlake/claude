@@ -565,9 +565,17 @@ section("7e. a career");
     } else if (A.SCREEN2 === "offseason") {
       A.draw();
       const o = L().offseason;
-      if (!o || o.draft.length !== 3) bad = bad || "no draft class";
-      A.Input.tap = "draft:" + rng.int(0, 2); A.update(1 / 60);
-      seasons++;
+      if (!o || o.board.length < 4) bad = bad || "no draft class";
+      if (A.HOT.find(b => b.id === "advancedraft")) A.Input.tap = "advancedraft";
+      else if (A.HOT.find(b => b.id === "draft:0")) A.Input.tap = "draft:" + rng.int(0, 3);
+      else if (A.HOT.find(b => b.id === "startyear")) {
+        // Everyone drafted, and only one of the eight picks was yours.
+        if (o.taken.length !== 8) bad = bad || "the draft did not go eight picks";
+        if (o.taken.filter(t => t.ab === L().my).length !== 1)
+          bad = bad || "you got the wrong number of picks";
+        A.Input.tap = "startyear"; seasons++;
+      } else bad = bad || "the off-season offered nothing to do";
+      A.update(1 / 60);
     } else A.update(1 / 60);
 
     // The invariants that matter, checked on every pass.
