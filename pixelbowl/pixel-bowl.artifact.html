@@ -4431,7 +4431,7 @@ function drawTitle() {
   const has = inSeason();
   button("season", bx, by, bw, 32,
          has ? "YEAR " + LEAGUE.year : "NEW SEASON",
-         { primary: true, scale: 2, sub: has ? seasonSub() : "A LEAGUE · A ROSTER · A CAREER" });
+         { primary: true, scale: 2, sub: has ? seasonSub() : "START A CAREER" });
   by += 38;
   const row = (id, label) => { button(id, bx, by, bw, bh, label); by += bh + gap; };
   row("start", "QUICK GAME");
@@ -5431,7 +5431,8 @@ resize();
    opens on the underground. Anywhere it cannot register — a file:// copy,
    an embed — it simply does not, and the game is unaffected.
    ------------------------------------------------------------------ */
-if ("serviceWorker" in navigator && location.protocol === "https:") {
+if (typeof navigator !== "undefined" && "serviceWorker" in navigator
+    && typeof window !== "undefined" && window.isSecureContext) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
   });
