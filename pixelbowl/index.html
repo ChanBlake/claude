@@ -397,6 +397,9 @@ const GLYPHS = {
   "(":"...#.,..#..,.#...,.#...,.#...,..#..,...#.", ")":".#...,..#..,...#.,...#.,...#.,..#..,.#...",
   "+":".....,..#..,..#..,#####,..#..,..#..,.....", "%":"##..#,##..#,...#.,..#..,.#...,#..##,#..##",
   "·":".....,.....,..#..,..#..,.....,.....,.....",
+  ">":"#....,.#...,..#..,...#.,..#..,.#...,#....",
+  "<":"....#,...#.,..#..,.#...,..#..,...#.,....#",
+  "#":".#.#.,.#.#.,#####,.#.#.,#####,.#.#.,.#.#.",
   "▲":"..#..,..#..,.###.,.###.,#####,#####,.....",
   "▼":".....,#####,#####,.###.,.###.,..#..,.....",
 };
@@ -602,6 +605,217 @@ let SETTINGS = Store.read("settings",
 let RECORD = Store.read("record", { played: 0, won: 0, lost: 0, tied: 0, best: 0, longestTD: 0 });
 const saveSettings = () => Store.write("settings", SETTINGS);
 const saveRecord = () => Store.write("record", RECORD);
+
+/* ===================================================================
+   THE SEASON — a league, a schedule, and eleven men who get better at
+   the things you actually ask them to do.
+
+   You only ever play offence, so that is what you manage: seven skill
+   players and a kicker, each a named, ageing person with his own
+   ratings and his own experience. The half of the game you never touch
+   is one number — your DEFENCE grade — which is honest about the
+   abstraction instead of hiding it behind a depth chart you cannot use.
+   =================================================================== */
+const SEASON_VERSION = 1;
+const REG_WEEKS = 7;               // eight clubs, everyone once
+const ROSTER_POS = ["QB", "RB", "WR", "WR", "TE", "OL", "OL"];
+
+const FIRST = ["ACE","BUCK","CASH","DALE","EARL","FINN","GUS","HANK","IKE","JUDE",
+  "KANE","LEV","MACK","NED","OTIS","PIKE","QUIN","REX","SAUL","TATE","URI","VANCE",
+  "WADE","XAVI","YORK","ZEKE","ABE","BRAM","CLAY","DREW","ELI","FLYNN","GRAY","HOLT",
+  "JETT","KIRK","LANE","MOSS","NOLAN","ORRIN","PERCY","ROY","STU","THEO","VIC","WYATT"];
+const LAST = ["ADLER","BRIGGS","CALLOW","DUNNE","ELKINS","FARROW","GRAVES","HOLLIS",
+  "IRWIN","JESSUP","KRANE","LOWRY","MERCER","NAVARRE","OAKES","PARRISH","QUILL",
+  "RHODES","STARK","TILLMAN","UPTON","VOSS","WHITLOCK","YEATS","ZANE","BARLOW",
+  "CROSS","DIGGS","EVERETT","FONTAINE","GILLEN","HARROW","INGRAM","JARVIS","KEEL",
+  "LARKIN","MUNRO","NIXON","ODELL","PRYCE","REEVES","SLOANE","TRUAX","VANCE","WREN"];
+
+// Which ratings a position actually lives on. Growth goes here and nowhere
+// else, so a lineman never gets faster hands for blocking well.
+const GROWS = {
+  QB: ["awr", "hnd", "acc", "agi"],
+  RB: ["spd", "agi", "pow", "acc"],
+  WR: ["hnd", "spd", "agi", "awr"],
+  TE: ["hnd", "blk", "pow", "awr"],
+  OL: ["blk", "pow", "awr", "acc"],
+  K:  ["pow", "awr", "acc"],
+};
+// What "overall" means for each of them — the same weights the roster screen
+// grades on, so the number on the card is the number that matters on the turf.
+const WEIGHTS = {
+  QB: { awr: 3, hnd: 3, acc: 1, agi: 1 },
+  RB: { spd: 3, agi: 3, pow: 2, acc: 2 },
+  WR: { hnd: 3, spd: 3, agi: 2, awr: 1 },
+  TE: { hnd: 3, blk: 2, pow: 2, awr: 1 },
+  OL: { blk: 4, pow: 3, awr: 1 },
+  K:  { pow: 3, awr: 2 },
+};
+
+function overallOf(p) {
+  const w = WEIGHTS[p.pos] || WEIGHTS.QB;
+  let sum = 0, tot = 0;
+  for (const k in w) { sum += p.r[k] * w[k]; tot += w[k]; }
+  return Math.round(sum / tot);
+}
+
+const NUM_BANDS = { QB: [1, 19], RB: [20, 39], WR: [80, 89], TE: [40, 49],
+                    OL: [60, 79], K: [1, 9] };
+
+function makePerson(pos, strength, rng, used, age) {
+  const r = makeRatings(pos, strength, rng);
+  const [lo, hi] = NUM_BANDS[pos];
+  let num = 0;
+  for (let i = 0; i < 60; i++) { const n = rng.int(lo, hi); if (!used.has(n)) { num = n; break; } }
+  if (!num) for (let n = 1; n < 100; n++) if (!used.has(n)) { num = n; break; }
+  used.add(num);
+  const p = {
+    id: rng.next(), pos, num,
+    first: rng.pick(FIRST), last: rng.pick(LAST),
+    age: age != null ? age : rng.int(22, 30),
+    r, xp: 0, lvl: 0, seasons: 0,
+    // Ceiling. A twenty-two-year-old with a high ceiling is worth keeping
+    // through a bad year; a thirty-year-old at his is not.
+    pot: 0,
+  };
+  // Never below where he already is: a thirty-year-old at his peak has a
+  // ceiling of exactly himself, not of the man he was at twenty-five.
+  p.pot = Math.round(clamp(Math.max(overallOf(p),
+    overallOf(p) + rng.int(2, 18) - Math.max(0, p.age - 24) * 1.5), 40, 99));
+  return p;
+}
+
+function makeSeasonRoster(team, rng) {
+  const used = new Set();
+  const off = ROSTER_POS.map(pos => makePerson(pos, team.str, rng, used));
+  const k = makePerson("K", team.str, rng, used);
+  return { off, k };
+}
+
+// Eight clubs, everyone once: the circle method, with the first club pinned
+// and the rest rotating around it.
+function makeSchedule(abs) {
+  const n = abs.length, fixed = abs[0];
+  let rot = abs.slice(1);
+  const weeks = [];
+  for (let w = 0; w < n - 1; w++) {
+    const games = [[fixed, rot[0]]];
+    for (let i = 1; i < n / 2; i++) games.push([rot[i], rot[rot.length - i]]);
+    weeks.push(games);
+    rot = [rot[rot.length - 1]].concat(rot.slice(0, rot.length - 1));
+  }
+  return weeks;
+}
+
+let LEAGUE = Store.read("league", null);
+const saveLeague = () => Store.write("league", LEAGUE);
+const inSeason = () => !!(LEAGUE && LEAGUE.v === SEASON_VERSION);
+
+function newSeasonLeague(myAb) {
+  const rng = makeRNG((Date.now() ^ (Math.random() * 0xffffffff)) >>> 0);
+  const abs = TEAMS.map(t => t.ab);
+  LEAGUE = {
+    v: SEASON_VERSION,
+    year: 1,
+    week: 0,                       // index into the schedule
+    my: myAb,
+    schedule: makeSchedule(abs),
+    clubs: {},                     // ab -> { w, l, t, pf, pa, str }
+    roster: makeSeasonRoster(teamBy(myAb), rng),
+    // Your defence, as one honest number. A good club starts with a better one,
+    // the same way it starts with better players.
+    def: Math.round(clamp(56 + teamBy(myAb).str * 1.8, 42, 78)),
+    log: [],                       // one line per week
+    phase: "regular",              // regular | playoffs | offseason | done
+    bracket: null,
+    title: 0,                      // championships won
+    lastGrowth: null,              // what the postgame screen has to say
+  };
+  for (const t of TEAMS) LEAGUE.clubs[t.ab] = { w: 0, l: 0, t: 0, pf: 0, pa: 0, str: t.str };
+  saveLeague();
+}
+
+const myClub = () => LEAGUE.clubs[LEAGUE.my];
+const clubStr = ab => (LEAGUE.clubs[ab] ? LEAGUE.clubs[ab].str : teamBy(ab).str);
+
+// This week's fixture for you, or null once the regular season is done.
+function myFixture() {
+  if (LEAGUE.phase === "playoffs") {
+    const tie = (LEAGUE.bracket || []).find(g => !g.done && (g.a === LEAGUE.my || g.b === LEAGUE.my));
+    return tie ? [tie.a, tie.b] : null;
+  }
+  const wk = LEAGUE.schedule[LEAGUE.week];
+  if (!wk) return null;
+  return wk.find(g => g[0] === LEAGUE.my || g[1] === LEAGUE.my) || null;
+}
+
+// A plausible football score built out of touchdowns and field goals rather
+// than a flat random number, so the standings read like a league table.
+function simScore(strFor, strAgainst, rng) {
+  const edge = (strFor - strAgainst) * 0.06;
+  const drives = 8;
+  let td = 0, fg = 0;
+  for (let i = 0; i < drives; i++) {
+    const roll = rng.unit() + edge;
+    if (roll > 0.74) td++;
+    else if (roll > 0.58) fg++;
+  }
+  return td * 7 + fg * 3;
+}
+
+function recordResult(aAb, bAb, sa, sb) {
+  const A = LEAGUE.clubs[aAb], B = LEAGUE.clubs[bAb];
+  A.pf += sa; A.pa += sb; B.pf += sb; B.pa += sa;
+  if (sa > sb) { A.w++; B.l++; }
+  else if (sb > sa) { B.w++; A.l++; }
+  else { A.t++; B.t++; }
+}
+
+// Everyone else's week, played out while you were playing yours.
+function simOtherGames(rng) {
+  const wk = LEAGUE.schedule[LEAGUE.week];
+  if (!wk) return;
+  for (const [a, b] of wk) {
+    if (a === LEAGUE.my || b === LEAGUE.my) continue;
+    const sa = simScore(clubStr(a), clubStr(b), rng);
+    const sb = simScore(clubStr(b), clubStr(a), rng);
+    recordResult(a, b, sa, sb);
+  }
+}
+
+function standings() {
+  return TEAMS.map(t => Object.assign({ ab: t.ab, team: t }, LEAGUE.clubs[t.ab]))
+    .sort((x, y) => (y.w - y.l) - (x.w - x.l) || (y.pf - y.pa) - (x.pf - x.pa) || y.pf - x.pf);
+}
+
+/* ---- growth ------------------------------------------------------
+   Experience comes from what a man actually did on the field, and it
+   only ever moves the ratings his position lives on. The conversion is
+   deliberately visible: the postgame screen names every point gained.
+   ------------------------------------------------------------------ */
+const xpNeeded = p => 100 + p.lvl * 30;
+
+function awardXP(p, amount, growth) {
+  if (!p || amount <= 0) return;
+  // Young men learn faster, and nobody learns much past their ceiling.
+  const ovr = overallOf(p);
+  const head = clamp((p.pot - ovr) / 12, 0, 1);
+  const youth = p.age <= 24 ? 1.3 : p.age <= 28 ? 1.0 : 0.7;
+  p.xp += amount * youth * (0.25 + 0.75 * head);
+  while (p.xp >= xpNeeded(p)) {
+    p.xp -= xpNeeded(p);
+    p.lvl++;
+    const pool = GROWS[p.pos] || GROWS.QB;
+    // A point on every trait the position is built on. Overall is a weighted
+    // average, so raising one rating barely moves the number on his card —
+    // which made three seasons of good football look like nothing happened.
+    for (const k of pool) {
+      if (overallOf(p) >= p.pot) break;
+      if (p.r[k] >= 99) continue;
+      p.r[k] = Math.min(99, p.r[k] + 1);
+    }
+    if (growth) growth.push({ who: p, stat: "lvl", by: 1, to: overallOf(p) });
+  }
+}
 
 // Difficulty changes how well the defence *reads* the play — how often it
 // calls the right scheme, and how quickly its defenders react. It never
@@ -964,6 +1178,7 @@ function makePlay(o) {
     handoffAt: play.kind === "run" ? 0.3 : -1,
     handoffDone: false,
     threw: false, completed: false,
+    catcher: null,            // idx of the man who caught it, for the season
     runT: null,               // when the defence first had a runner to chase
     graceUntil: 0,
     windup: -1, windupTo: null,
@@ -1104,6 +1319,7 @@ function makePlay(o) {
       off.p.hasBall = true; off.p.x = b.tx; off.p.y = b.ty;
       S.ball = { state: "held", who: off.p.id, x: b.tx, y: b.ty, h: 0 };
       S.completed = true;
+      S.catcher = off.p.idx;          // for the season's book-keeping
       Sound.grab();
       // Route runners become blockers the moment the ball is caught.
       P.forEach(p => { if (p.side === "off" && p !== off.p && (p.job.t === "route" || p.job.t === "delay")) p.job = { t: "block", bias: 0 }; });
@@ -1216,10 +1432,17 @@ function makePlay(o) {
     if (S.over) return;
     S.over = true;
     S.ball = { state: "dead", who: -1, x, y, h: 0 };
+    const holder = P.find(p => p.hasBall);
     S.result = {
       kind, x: clamp(x, 0.5, FIELD.W - 0.5), y,
       yards: y - S.los,
       headline,
+      // Who did it. The play does not care, but a season does — every rating
+      // point a man earns has to be traceable to something he actually did.
+      by: holder && holder.side === "off" ? holder.idx : -1,
+      catcher: S.catcher != null ? S.catcher : -1,
+      breaks: holder ? holder.breaks : 0,
+      sacked: kind === "sack",
       elapsed: S.t * CFG.clockSpeed,
       pass: S.passAttempted, complete: S.completed,
     };
@@ -1798,7 +2021,7 @@ const G = {
   bannerT: 0,
 };
 
-function newGame(myAb, oppAb) {
+function newGame(myAb, oppAb, opts = {}) {
   const seed = (Date.now() ^ (Math.random() * 0xffffffff)) >>> 0;
   RNG = makeRNG(seed);
   const my = teamBy(myAb), opp = teamBy(oppAb);
@@ -1808,7 +2031,15 @@ function newGame(myAb, oppAb) {
   G.st = {
     seed,
     my, opp,
-    myRoster: makeRoster(my, seed ^ 0x5f3a), oppRoster: makeRoster(opp, seed ^ 0x9c17),
+    // In a season your offence is the eleven you have been coaching; the rest
+    // of the field is generated as usual. `makeRoster` shapes both sides, and
+    // only the offence half of yours is ever put on the grass.
+    myRoster: opts.myRoster || makeRoster(my, seed ^ 0x5f3a),
+    oppRoster: makeRoster(opp, seed ^ 0x9c17),
+    season: !!opts.season,
+    // What their offence is up against. In an exhibition that is your club's
+    // nominal strength; in a season it is the DEFENCE grade you have coached.
+    defStr: opts.defStr != null ? opts.defStr : my.str,
     q: 1, clock: qs, quarterLen: qs,
     us: 0, them: 0,
     poss: first,
@@ -1825,6 +2056,8 @@ function newGame(myAb, oppAb) {
               drives: 0, startSum: 0 },
     },
     longestTD: 0,
+    pstat: {},                   // season only: what each of your men did
+    dstat: { stops: 0, takeaways: 0 },
     tend: { run: 0, pass: 0 },   // what you have been calling lately
     log: [],
   };
@@ -1912,12 +2145,280 @@ function finishGame() {
   RECORD.best = Math.max(RECORD.best, s.us);
   RECORD.longestTD = Math.max(RECORD.longestTD, s.longestTD);
   saveRecord();
+  if (s.season && inSeason()) finishSeasonGame(s);
+}
+
+/* ---- the season, after the whistle ------------------------------- */
+function finishSeasonGame(s) {
+  const rng = makeRNG((Date.now() ^ (s.seed >>> 3)) >>> 0);
+  const growth = [];
+  const R = LEAGUE.roster;
+
+  // Turn the afternoon into experience, and experience into rating points.
+  for (const key in s.pstat) {
+    const i = +key;
+    const man = i === 7 ? R.k : R.off[i];
+    awardXP(man, s.pstat[key].xp, growth);
+  }
+  // Your defence is graded on stops, and it moves slowly — one number should
+  // not swing a season on one good afternoon.
+  const dGain = s.dstat.stops * 0.9 + s.dstat.takeaways * 2.2;
+  LEAGUE.defXP = (LEAGUE.defXP || 0) + dGain;
+  while (LEAGUE.defXP >= 22 && LEAGUE.def < 95) {
+    LEAGUE.defXP -= 22; LEAGUE.def++;
+    growth.push({ unit: "DEFENCE", stat: "grade", by: 1 });
+  }
+
+  const won = s.us > s.them, tied = s.us === s.them;
+  LEAGUE.lastGrowth = {
+    us: s.us, them: s.them, opp: s.opp.ab, won, tied,
+    week: LEAGUE.phase === "playoffs" ? "PLAYOFF" : "WEEK " + (LEAGUE.week + 1),
+    growth: growth.slice(0, 8),
+    stats: Object.keys(s.pstat).map(k => ({ i: +k, line: s.pstat[k] })),
+  };
+
+  if (LEAGUE.phase === "playoffs") {
+    const tie = (LEAGUE.bracket || []).find(g => !g.done && (g.a === LEAGUE.my || g.b === LEAGUE.my));
+    if (tie) {
+      const meFirst = tie.a === LEAGUE.my;
+      tie.sa = meFirst ? s.us : s.them;
+      tie.sb = meFirst ? s.them : s.us;
+      tie.done = true;
+      // A tie in a knockout goes to the higher seed, which is what a coin
+      // toss is for in a game with no overtime.
+      tie.winner = tie.sa === tie.sb ? tie.a : (tie.sa > tie.sb ? tie.a : tie.b);
+    }
+    advancePlayoffs(rng);
+  } else {
+    recordResult(LEAGUE.my, s.opp.ab, s.us, s.them);
+    simOtherGames(rng);
+    LEAGUE.log.push(`W${LEAGUE.week + 1} ${won ? "W" : tied ? "T" : "L"} ${s.us}-${s.them} ${s.opp.ab}`);
+    LEAGUE.week++;
+    if (LEAGUE.week >= REG_WEEKS) startPlayoffs(rng);
+  }
+  saveLeague();
+}
+
+/* ---- the off-season ----------------------------------------------
+   Everybody gets a year older, which is the only thing in this game
+   that happens to you rather than because of you. Then one draft pick,
+   because a season you cannot change anything about is a schedule, not
+   a career.
+   ------------------------------------------------------------------ */
+function buildOffseason(rng) {
+  const R = LEAGUE.roster, all = R.off.concat([R.k]);
+  const aged = [], gone = [];
+
+  for (const p of all) {
+    p.age++; p.seasons++;
+    const ovr = overallOf(p);
+    const pool = GROWS[p.pos] || GROWS.QB;
+    let delta = 0;
+    if (p.age <= 24) delta = rng.int(1, 3);
+    else if (p.age <= 28) delta = rng.int(0, 1);
+    else if (p.age <= 31) delta = -rng.int(0, 1);
+    else delta = -rng.int(1, 3);
+    // Growth still respects the ceiling; decline does not respect anything.
+    for (let i = 0; i < Math.abs(delta); i++) {
+      const k = pool[(i + p.age) % pool.length];
+      if (delta > 0) { if (overallOf(p) < p.pot) p.r[k] = Math.min(99, p.r[k] + 1); }
+      else p.r[k] = Math.max(8, p.r[k] - 1);
+    }
+    // Ageing eats the ceiling too, so a thirty-three-year-old is finished
+    // improving no matter how good he once looked.
+    p.pot = Math.round(Math.max(overallOf(p), p.pot - (p.age > 29 ? 2 : 0)));
+    const after = overallOf(p);
+    const retires = p.age >= 38 || (p.age >= 33 && after < 55) || (p.age >= 35 && rng.chance(0.5));
+    if (retires) gone.push(p); else aged.push({ p, was: ovr, now: after });
+  }
+
+  // Replace the retired at once. A roster with a hole in it is a roster that
+  // every screen has to remember to check, and one of them will forget: the
+  // hub crashed on exactly this in the seventh season of a test career. The
+  // draft then upgrades a slot rather than filling a void.
+  const holes = [];
+  for (const p of gone) {
+    const i = R.off.indexOf(p);
+    if (i >= 0) { holes.push(ROSTER_POS[i]); R.off[i] = null; }
+    else { holes.push("K"); R.k = null; }
+  }
+  fillHoles(rng);
+
+  // The league moves around you: clubs drift a little every year so the
+  // table is not the same table it was last season.
+  // Records survive until the new season actually starts, so the off-season
+  // and the table still have last year to show you.
+  for (const ab in LEAGUE.clubs) {
+    const c = LEAGUE.clubs[ab];
+    c.str = clamp(c.str + rng.int(-2, 2), -6, 9);
+  }
+
+  // Three prospects at whatever you are thinnest at, plus the holes that
+  // retirement left. You pick one; the rest of the holes are filled by
+  // replacement-level bodies, which is what actually happens.
+  // Where you just lost somebody first, then wherever you are thinnest, then
+  // somewhere else entirely — three prospects at one position is not a
+  // decision, it is a formality.
+  // The kicker counts as a position you can be thin at, because he is one.
+  const thin = R.off.map((p, i) => ({ pos: ROSTER_POS[i], p }))
+    .concat([{ pos: "K", p: R.k }])
+    .filter(x => x.p)
+    .map(x => ({ pos: x.pos, ovr: overallOf(x.p) - (x.p.age > 30 ? 8 : 0) }))
+    .sort((a, b) => a.ovr - b.ovr).map(x => x.pos);
+  const wanted = [];
+  for (const pos of holes.concat(thin, ["WR", "RB", "TE", "OL", "K"])) {
+    if (wanted.length >= 3) break;
+    const need = holes.filter(h => h === pos).length;
+    if (!wanted.includes(pos) || wanted.filter(w => w === pos).length < need) wanted.push(pos);
+  }
+  const used = new Set(all.map(p => p.num));
+  const seen = new Set();
+  const classOf = wanted.slice(0, 3).map(pos => {
+    let p;
+    for (let i = 0; i < 12; i++) {
+      p = makePerson(pos, 2 + rng.int(-3, 6), rng, used, rng.int(21, 23));
+      if (!seen.has(p.first)) break;
+    }
+    seen.add(p.first);
+    p.pot = Math.round(clamp(overallOf(p) + rng.int(8, 26), 55, 99));
+    return p;
+  });
+  return { year: LEAGUE.year, retired: gone.map(p => ({ n: p.first + " " + p.last, pos: p.pos, age: p.age })),
+           aged: aged.filter(a => a.now !== a.was).slice(0, 8), draft: classOf };
+}
+
+// Anywhere still empty after the draft gets a replacement-level body, because
+// you cannot take the field with six men.
+function fillHoles(rng) {
+  const R = LEAGUE.roster;
+  const used = new Set(R.off.filter(Boolean).map(p => p.num).concat(R.k ? [R.k.num] : []));
+  R.off.forEach((p, i) => {
+    if (!p) R.off[i] = makePerson(ROSTER_POS[i], -3, rng, used, rng.int(22, 26));
+  });
+  if (!R.k) R.k = makePerson("K", -3, rng, used, rng.int(23, 30));
+}
+
+// Walking away is a real choice when nobody on offer beats what you have.
+function passOnDraft() { startNextSeason(); }
+
+function signDraftPick(pick) {
+  const R = LEAGUE.roster;
+  if (pick.pos === "K") { R.k = pick; }
+  else {
+    // He takes the job from whoever is worst at his position — which after a
+    // retirement is the replacement-level body standing in for the man who left.
+    const cands = R.off.map((p, i) => ({ p, i })).filter(x => ROSTER_POS[x.i] === pick.pos);
+    if (cands.length) {
+      cands.sort((a, b) => overallOf(a.p) - overallOf(b.p));
+      R.off[cands[0].i] = pick;
+    }
+  }
+  startNextSeason();
+}
+
+function startNextSeason() {
+  for (const ab in LEAGUE.clubs) {
+    const c = LEAGUE.clubs[ab];
+    c.w = 0; c.l = 0; c.t = 0; c.pf = 0; c.pa = 0;
+  }
+  LEAGUE.year++;
+  LEAGUE.week = 0;
+  LEAGUE.phase = "regular";
+  LEAGUE.bracket = null;
+  LEAGUE.champion = null;
+  LEAGUE.offseason = null;
+  LEAGUE.lastGrowth = null;
+  LEAGUE.log = [];
+  LEAGUE.schedule = makeSchedule(TEAMS.map(t => t.ab));
+  saveLeague();
+}
+
+function startPlayoffs(rng) {
+  const top = standings().slice(0, 4).map(r => r.ab);
+  LEAGUE.phase = "playoffs";
+  LEAGUE.bracket = [
+    { round: "SEMI-FINAL", a: top[0], b: top[3], done: false },
+    { round: "SEMI-FINAL", a: top[1], b: top[2], done: false },
+  ];
+  if (!top.includes(LEAGUE.my)) {
+    // You did not make it. The league plays on without you, which stings more
+    // than being told the season is over.
+    for (const g of LEAGUE.bracket) simTie(g, rng);
+    advancePlayoffs(rng);
+  }
+}
+
+function simTie(g, rng) {
+  g.sa = simScore(clubStr(g.a), clubStr(g.b), rng);
+  g.sb = simScore(clubStr(g.b), clubStr(g.a), rng);
+  if (g.sa === g.sb) g.sa += 3;
+  g.winner = g.sa > g.sb ? g.a : g.b;
+  g.done = true;
+}
+
+function advancePlayoffs(rng) {
+  const B = LEAGUE.bracket;
+  // Play out any tie you are not in.
+  for (const g of B) if (!g.done && g.a !== LEAGUE.my && g.b !== LEAGUE.my) simTie(g, rng);
+  if (B.every(g => g.done) && B.length === 2) {
+    B.push({ round: "PIXEL BOWL", a: B[0].winner, b: B[1].winner, done: false });
+    const f = B[2];
+    if (f.a !== LEAGUE.my && f.b !== LEAGUE.my) simTie(f, rng);
+  }
+  const f = B[2];
+  if (f && f.done) {
+    LEAGUE.champion = f.winner;
+    if (f.winner === LEAGUE.my) LEAGUE.title++;
+    LEAGUE.phase = "offseason";
+    LEAGUE.offseason = buildOffseason(rng);
+  }
+}
+
+/* ---- what each man did, this game ---------------------------------
+   Only kept in a season. The play simulation stays ignorant of all of
+   this: it reports who ended up with the ball and the rules translate
+   that into a stat line and, eventually, into rating points.
+   ------------------------------------------------------------------ */
+function manLine(i) {
+  const s = G.st;
+  if (!s.pstat[i]) s.pstat[i] = { att: 0, comp: 0, yds: 0, td: 0, rec: 0, car: 0, brk: 0, made: 0, kicks: 0, xp: 0 };
+  return s.pstat[i];
+}
+
+function credit(res) {
+  const s = G.st;
+  if (!s.season) return;
+  const td = res.kind === "td" ? 1 : 0;
+  const gain = Math.max(0, res.yards);
+
+  if (res.pass) {
+    const qb = manLine(0);
+    qb.att++;
+    if (res.complete) {
+      qb.comp++; qb.yds += gain; qb.td += td;
+      qb.xp += 5 + gain * 0.45 + td * 20;
+      if (res.catcher >= 0) {
+        const w = manLine(res.catcher);
+        w.rec++; w.yds += gain; w.td += td; w.brk += res.breaks;
+        w.xp += 8 + gain * 0.5 + td * 20 + res.breaks * 6;
+      }
+    }
+    // The men up front are graded on the thing you can see: did he get to
+    // throw it at all.
+    if (!res.sacked) for (const i of [5, 6]) manLine(i).xp += 4;
+  } else if (res.kind !== "sack" && res.by >= 0) {
+    const b = manLine(res.by);
+    b.car++; b.yds += gain; b.td += td; b.brk += res.breaks;
+    b.xp += 6 + gain * 0.7 + td * 20 + res.breaks * 6;
+    for (const i of [5, 6]) manLine(i).xp += 3;
+  }
 }
 
 /* ---- applying your play ------------------------------------------ */
 function applyResult(res) {
   const s = G.st, st = s.stats.us;
   st.plays++;
+  credit(res);
   if (res.pass) { st.att++; if (res.complete) { st.comp++; st.pass += res.yards; } }
   else if (res.kind !== "sack") st.rush += res.yards;
   // Net yards. This used to floor every play at zero, so a nine-yard sack cost
@@ -1997,6 +2498,7 @@ function beginTry(twoPoint) {
 
 function finishTry(good, points) {
   const s = G.st;
+  if (s.season && points === 1) { const k = manLine(7); k.kicks++; if (good) { k.made++; k.xp += 7; } }
   if (good) { s.us += points; say(points === 2 ? "TWO POINTS" : "EXTRA POINT GOOD", 1.3, "good"); }
   else say("NO GOOD", 1.3, "bad");
   s.tryFor = null;
@@ -2071,7 +2573,7 @@ function simulateTheirDrive() {
   // normal — so picking the best team in the league against a middling one
   // quietly shut the opponent out, and the margin came from the team select
   // screen rather than from anything you did with the ball.
-  const edge = (s.opp.str - s.my.str) * 0.004;
+  const edge = (s.opp.str - s.defStr) * 0.004;
   // How well the possession goes: the strength gap plus the difficulty's thumb
   // on the scale, bounded. This used to be added straight onto the outcome roll
   // and compared against fixed thresholds, which meant a large enough bonus
@@ -2180,6 +2682,12 @@ function finishTheirDrive() {
   s.drive = null;
   if (s.phase === "final") return;
   const r = d.result;
+  // Your defence never takes the field, so it is graded on outcomes: every
+  // possession they end without points is a stop, and a takeaway is worth more.
+  if (s.season) {
+    if (r === "turnover") { s.dstat.stops++; s.dstat.takeaways++; }
+    else if (r === "punt" || r === "miss") s.dstat.stops++;
+  }
   if (r === "td" || r === "fg") { giveUs(FIELD.ownGoal + 25); say("YOUR BALL", 1.0); return; }
   giveUs(d.endY != null ? d.endY : FIELD.ownGoal + 25);
   say("YOUR BALL", 1.0);
@@ -3003,20 +3511,284 @@ function drawTitle() {
   text("FOUR DOWNS · ONE THUMB", lx, Math.round(ARTH * 0.24) + 84, { color: COL.dim });
 
   const bx = Math.round(ARTW * 0.58), bw = Math.round(ARTW * 0.34);
-  let by = Math.round(ARTH * 0.18);
-  button("start", bx, by, bw, 28, "PLAY", { primary: true, scale: 2 });
-  by += 36;
-  button("diff", bx, by, bw, 20, "DIFFICULTY  " + DIFFS[SETTINGS.diff].name); by += 26;
-  button("qlen", bx, by, bw, 20, "QUARTER  " + SETTINGS.quarter + " MIN"); by += 26;
-  button("dir", bx, by, bw, 20,
-         "YOU ATTACK  " + (SETTINGS.driveRight ? "RIGHT" : "LEFT")); by += 26;
-  button("sfx", bx, by, bw, 20, "SOUND  " + (SETTINGS.sound ? "ON" : "OFF"));
+  let by = Math.round(ARTH * 0.14);
+  const has = inSeason();
+  button("season", bx, by, bw, 26,
+         has ? "YEAR " + LEAGUE.year : "NEW SEASON",
+         { primary: true, scale: 2, sub: has ? seasonSub() : "A LEAGUE, A ROSTER, A CAREER" });
+  by += 34;
+  button("start", bx, by, bw, 18, "QUICK GAME"); by += 24;
+  button("diff", bx, by, bw, 18, "DIFFICULTY  " + DIFFS[SETTINGS.diff].name); by += 22;
+  button("qlen", bx, by, bw, 18, "QUARTER  " + SETTINGS.quarter + " MIN"); by += 22;
+  button("dir", bx, by, bw, 18,
+         "YOU ATTACK  " + (SETTINGS.driveRight ? "RIGHT" : "LEFT")); by += 22;
+  button("sfx", bx, by, bw, 18, "SOUND  " + (SETTINGS.sound ? "ON" : "OFF"));
 
   const rec = RECORD.played
     ? RECORD.won + "-" + RECORD.lost + (RECORD.tied ? "-" + RECORD.tied : "") + "   BEST " + RECORD.best
     : "NO GAMES PLAYED YET";
-  text(rec, ARTW / 2, ARTH - 14, { color: COL.dim });
+  text(rec, ARTW / 2, ARTH - 12, { color: COL.dim });
 }
+
+function seasonSub() {
+  const c = myClub();
+  const rec = c.w + "-" + c.l + (c.t ? "-" + c.t : "");
+  if (LEAGUE.phase === "offseason") return teamBy(LEAGUE.my).ab + "  " + rec + "  ·  OFF-SEASON";
+  if (LEAGUE.phase === "playoffs") return teamBy(LEAGUE.my).ab + "  " + rec + "  ·  PLAYOFFS";
+  return teamBy(LEAGUE.my).ab + "  " + rec + "  ·  WEEK " + (LEAGUE.week + 1);
+}
+
+/* ===================================================================
+   SEASON SCREENS — the hub, the roster, the table, and the two
+   moments that make a career: what a game did to your men, and what a
+   year did to them.
+   =================================================================== */
+const posColour = pos => pos === "QB" ? "#F5C542" : pos === "OL" ? "#8296A3"
+                       : pos === "K" ? "#9FB3A4" : "#6FE3D2";
+
+// One man, one row. Position, number, name, age, overall, and how close he is
+// to the next rating point.
+function drawManRow(p, x, y, w, opt = {}) {
+  const ovr = overallOf(p);
+  rect(x, y, w, 15, opt.hot ? COL.panelHi : COL.panel);
+  rect(x, y, 2, 15, posColour(p.pos));
+  text(p.pos, x + 8, y + 4, { align: -1, color: posColour(p.pos), shadow: false });
+  text(String(p.num), x + 42, y + 4, { align: 1, color: COL.dim, shadow: false });
+  text(p.first + " " + p.last, x + 52, y + 4, { align: -1, color: COL.ink, shadow: false });
+  text(String(p.age), x + w - 96, y + 4, { align: 1, color: COL.dim, shadow: false });
+  // The bar is progress toward his next point; the tick is his ceiling.
+  const bw = 44, bx = x + w - 88;
+  rect(bx, y + 5, bw, 5, "#2B3A47");
+  rect(bx, y + 5, bw * clamp(p.xp / xpNeeded(p), 0, 1), 5, COL.flood);
+  const tick = bx + bw * clamp((p.pot - 40) / 59, 0, 1);
+  void tick;
+  text(String(ovr), x + w - 30, y + 4,
+       { align: 1, color: ovr >= p.pot ? COL.dim : COL.ink, shadow: false });
+  text("/" + p.pot, x + w - 6, y + 4, { align: 1, color: COL.dim, shadow: false });
+}
+
+function drawHub() {
+  rect(0, 0, ARTW, ARTH, COL.night);
+  const me = teamBy(LEAGUE.my), c = myClub();
+  rect(0, 0, ARTW, 26, COL.night2);
+  rect(0, 26, ARTW, 1, COL.edge);
+  rect(6, 5, 4, 16, me.trim);
+  text(me.city + "  " + me.nick, 16, 4, { align: -1, scale: 2, color: COL.ink });
+  text("YEAR " + LEAGUE.year + (LEAGUE.title ? "   ·   " + LEAGUE.title + " TITLE" + (LEAGUE.title > 1 ? "S" : "") : ""),
+       ARTW - 8, 10, { align: 1, color: COL.flood });
+
+  const fx = myFixture();
+  const bx = 10, bw = Math.round(ARTW * 0.46);
+  panel(bx, 36, bw, 74, COL.night2, COL.edge);
+  if (LEAGUE.phase === "offseason") {
+    text("SEASON OVER", bx + bw / 2, 44, { scale: 2, color: COL.flood });
+    const champ = LEAGUE.champion ? teamBy(LEAGUE.champion) : null;
+    text(champ ? champ.city + " TOOK THE TITLE" : "", bx + bw / 2, 66, { color: COL.dim });
+    button("offseason", bx + 12, 84, bw - 24, 18, "OFF-SEASON", { primary: true });
+  } else if (fx) {
+    const oppAb = fx[0] === LEAGUE.my ? fx[1] : fx[0];
+    const opp = teamBy(oppAb), oc = LEAGUE.clubs[oppAb];
+    text(LEAGUE.phase === "playoffs" ? currentTie().round : "WEEK " + (LEAGUE.week + 1),
+         bx + bw / 2, 42, { color: COL.dim });
+    // The club's trim colour is right for a stripe and wrong for text — half
+    // the league is near-black on a near-black panel.
+    rect(bx + 10, 52, 3, 16, opp.trim);
+    text("VS  " + opp.city, bx + bw / 2, 54, { scale: 2, color: COL.ink });
+    text(oc.w + "-" + oc.l + (oc.t ? "-" + oc.t : "") + "   ·   " + opp.nick,
+         bx + bw / 2, 74, { color: COL.dim });
+    button("kickoff", bx + 12, 86, bw - 24, 18, "KICK OFF", { primary: true });
+  } else {
+    text("WATCHING THE PLAYOFFS", bx + bw / 2, 56, { color: COL.dim });
+    button("watch", bx + 12, 86, bw - 24, 18, "CONTINUE", { primary: true });
+  }
+
+  // Your record, and the last few results.
+  const rx = bx + bw + 10, rw = ARTW - rx - 10;
+  panel(rx, 36, rw, 74, COL.night2, COL.edge);
+  text(c.w + "-" + c.l + (c.t ? "-" + c.t : ""), rx + rw / 2, 42, { scale: 3, color: COL.ink });
+  text("POINTS  " + c.pf + " FOR   " + c.pa + " AGAINST", rx + rw / 2, 66, { color: COL.dim });
+  const recent = LEAGUE.log.slice(-2);
+  recent.forEach((l, i) => text(l, rx + rw / 2, 80 + i * 11, { color: COL.dim, shadow: false }));
+
+  const bw2 = Math.round((ARTW - 30) / 3);
+  button("roster", 10, 120, bw2, 22, "ROSTER", { scale: 2 });
+  button("table", 15 + bw2, 120, bw2, 22, "TABLE", { scale: 2 });
+  button("quit", 20 + bw2 * 2, 120, bw2, 22, "MENU", { scale: 2 });
+
+  // The eleven you are taking out there, at a glance.
+  const R = LEAGUE.roster;
+  text("YOUR OFFENCE", 10, 150, { align: -1, color: COL.flood });
+  text("DEFENCE " + LEAGUE.def + "   ·   KICKER " + LEAGUE.roster.k.last + " " + overallOf(LEAGUE.roster.k),
+       ARTW - 10, 150, { align: 1, color: COL.dim, shadow: false });
+  const cw = Math.round((ARTW - 20 - 6 * 4) / 7);
+  R.off.forEach((p, i) => {
+    const x = 10 + i * (cw + 4);
+    const h = ARTH - 162 - 8;
+    panel(x, 162, cw, h, COL.panel, COL.edge);
+    rect(x, 162, cw, 2, posColour(p.pos));
+    text(p.pos, x + cw / 2, 168, { color: posColour(p.pos), shadow: false });
+    text(p.last.slice(0, 8), x + cw / 2, 180, { color: COL.ink, shadow: false });
+    text(String(overallOf(p)), x + cw / 2, 192, { scale: 2, color: COL.flood });
+    // How close he is to his next rating point, and to his ceiling.
+    const bw3 = cw - 12, bx3 = x + 6;
+    rect(bx3, 212, bw3, 4, "#2B3A47");
+    rect(bx3, 212, bw3 * clamp(p.xp / xpNeeded(p), 0, 1), 4, COL.flood);
+    text("AGE " + p.age + " · " + p.pot, x + cw / 2, 220, { color: COL.dim, shadow: false });
+  });
+}
+
+const currentTie = () => (LEAGUE.bracket || []).find(g => !g.done && (g.a === LEAGUE.my || g.b === LEAGUE.my)) || { round: "PLAYOFF" };
+
+function drawRoster() {
+  rect(0, 0, ARTW, ARTH, COL.night);
+  text("ROSTER", 10, 8, { align: -1, scale: 2, color: COL.flood });
+  text("AGE      NEXT POINT        OVR / CEILING", ARTW - 10, 12, { align: 1, color: COL.dim });
+  const R = LEAGUE.roster, all = R.off.concat([R.k]);
+  const w = ARTW - 20;
+  all.forEach((p, i) => drawManRow(p, 10, 26 + i * 17, w));
+  panel(10, 26 + all.length * 17 + 2, w, 18, COL.panel, COL.edge);
+  rect(10, 26 + all.length * 17 + 2, 2, 18, COL.bad);
+  text("DEF", 18, 26 + all.length * 17 + 7, { align: -1, color: COL.bad, shadow: false });
+  text("GRADED ON STOPS, NOT SNAPS", 62, 26 + all.length * 17 + 7,
+       { align: -1, color: COL.dim, shadow: false });
+  text(String(LEAGUE.def), 10 + w - 30, 26 + all.length * 17 + 7, { align: 1, color: COL.ink, shadow: false });
+  text("MEN IMPROVE BY DOING. THROW TO HIM AND HE GETS BETTER AT CATCHING;",
+       ARTW / 2, ARTH - 42, { color: "#5D707D", shadow: false });
+  text("THE BAR IS HIS NEXT RATING POINT, THE SECOND NUMBER IS AS GOOD AS HE WILL EVER BE.",
+       ARTW / 2, ARTH - 32, { color: "#5D707D", shadow: false });
+  button("back", ARTW / 2 - 40, ARTH - 20, 80, 16, "BACK");
+}
+
+function drawTable() {
+  rect(0, 0, ARTW, ARTH, COL.night);
+  text("THE TABLE", 10, 8, { align: -1, scale: 2, color: COL.flood });
+  text("YEAR " + LEAGUE.year, ARTW - 10, 12, { align: 1, color: COL.dim });
+  const rows = standings();
+  const w = ARTW - 20;
+  text("W   L   T      PF    PA", ARTW - 16, 26, { align: 1, color: COL.dim, shadow: false });
+  rows.forEach((r, i) => {
+    const y = 36 + i * 17, mine = r.ab === LEAGUE.my;
+    rect(10, y, w, 15, mine ? COL.panelHi : COL.panel);
+    rect(10, y, 3, 15, r.team.trim);
+    text(String(i + 1), 20, y + 4, { align: -1, color: COL.dim, shadow: false });
+    text(r.team.city, 34, y + 4, { align: -1, color: mine ? COL.flood : COL.ink, shadow: false });
+    if (i < 4 && LEAGUE.phase !== "offseason")
+      text("PLAYOFF", 10 + w - 150, y + 4, { align: 1, color: COL.good, shadow: false });
+    const cols = [String(r.w), String(r.l), String(r.t), String(r.pf), String(r.pa)];
+    cols.forEach((c, j) => text(c, 10 + w - 118 + j * 24, y + 4,
+                                { align: 1, color: j < 3 ? COL.ink : COL.dim, shadow: false }));
+  });
+  if (LEAGUE.bracket) {
+    const bx = 10;
+    text("PLAYOFFS", bx, ARTH - 34, { align: -1, color: COL.flood, shadow: false });
+    LEAGUE.bracket.forEach((g, i) => {
+      const line = g.done ? `${g.a} ${g.sa} - ${g.sb} ${g.b}` : `${g.a} v ${g.b}`;
+      text(g.round + "  " + line, bx + 70 + i * 150, ARTH - 34,
+           { align: -1, color: g.done ? COL.dim : COL.ink, shadow: false });
+    });
+  }
+  button("back", ARTW / 2 - 40, ARTH - 20, 80, 16, "BACK");
+}
+
+function drawGrowth() {
+  const g = LEAGUE.lastGrowth;
+  rect(0, 0, ARTW, ARTH, COL.night);
+  if (!g) { button("back", ARTW / 2 - 40, ARTH - 20, 80, 16, "BACK"); return; }
+  const tone = g.won ? COL.good : g.tied ? COL.flood : COL.bad;
+  text(g.won ? "WON" : g.tied ? "DREW" : "LOST", 10, 8, { align: -1, scale: 2, color: tone });
+  text(g.week + "   " + g.us + " - " + g.them + "   " + g.opp, 10, 28, { align: -1, color: COL.dim });
+
+  // Left: what each man did. Right: what it earned him.
+  const lw = Math.round(ARTW * 0.52);
+  panel(10, 42, lw, ARTH - 66, COL.night2, COL.edge);
+  text("THIS AFTERNOON", 10 + lw / 2, 47, { color: COL.flood });
+  const R = LEAGUE.roster;
+  const lines = g.stats
+    .map(s => ({ man: s.i === 7 ? R.k : R.off[s.i], l: s.line }))
+    .filter(x => x.man && (x.l.comp || x.l.rec || x.l.car || x.l.made))
+    .slice(0, 8);
+  lines.forEach((x, i) => {
+    const y = 60 + i * 13;
+    text(x.man.pos + " " + x.man.last.slice(0, 8), 18, y, { align: -1, color: COL.ink, shadow: false });
+    const l = x.l;
+    const bits = [];
+    if (l.comp) bits.push(l.comp + "/" + l.att + "  " + Math.round(l.yds) + " YDS");
+    else if (l.rec) bits.push(l.rec + " CATCH  " + Math.round(l.yds) + " YDS");
+    else if (l.car) bits.push(l.car + " CARRY  " + Math.round(l.yds) + " YDS");
+    if (l.made) bits.push(l.made + "/" + l.kicks + " KICKS");
+    if (l.td) bits.push(l.td + " TD");
+    text(bits.join("   ") || "-", 10 + lw - 8, y, { align: 1, color: COL.dim, shadow: false });
+  });
+
+  const rx = 10 + lw + 10, rw = ARTW - rx - 10;
+  panel(rx, 42, rw, ARTH - 66, COL.night2, COL.edge);
+  text("WHAT IT EARNED", rx + rw / 2, 47, { color: COL.flood });
+  if (!g.growth.length) text("NOBODY IMPROVED THIS WEEK", rx + rw / 2, 76, { color: COL.dim });
+  g.growth.forEach((gr, i) => {
+    const y = 60 + i * 13;
+    const who = gr.unit ? gr.unit : gr.who.pos + " " + gr.who.last.slice(0, 8);
+    text(who, rx + 8, y, { align: -1, color: COL.ink, shadow: false });
+    const what = gr.unit ? "+" + gr.by + " GRADE" : "LEVELLED UP  >  " + gr.to;
+    text(what, rx + rw - 8, y, { align: 1, color: COL.good, shadow: false });
+  });
+  button("hub", ARTW / 2 - 60, ARTH - 20, 120, 16, "CONTINUE", { primary: true });
+}
+
+const STAT_NAME = { spd: "SPEED", acc: "BURST", agi: "AGILITY", pow: "POWER", hnd: "HANDS",
+                    tkl: "TACKLE", cov: "COVER", blk: "BLOCK", awr: "AWARENESS", grade: "GRADE" };
+
+function drawOffseason() {
+  const o = LEAGUE.offseason;
+  rect(0, 0, ARTW, ARTH, COL.night);
+  if (!o) { button("hub", ARTW / 2 - 40, ARTH - 20, 80, 16, "BACK"); return; }
+  text("OFF-SEASON", 10, 8, { align: -1, scale: 2, color: COL.flood });
+  const champ = LEAGUE.champion ? teamBy(LEAGUE.champion) : null;
+  text(champ ? (LEAGUE.champion === LEAGUE.my ? "YOU WON THE PIXEL BOWL" : champ.city + " WON THE PIXEL BOWL") : "",
+       ARTW - 10, 12, { align: 1, color: LEAGUE.champion === LEAGUE.my ? COL.good : COL.dim });
+
+  const lw = Math.round(ARTW * 0.36);
+  panel(10, 30, lw, ARTH - 54, COL.night2, COL.edge);
+  text("A YEAR OLDER", 10 + lw / 2, 35, { color: COL.flood });
+  let y = 50;
+  o.retired.forEach(r => {
+    text(r.pos + " " + r.n.slice(0, 14), 18, y, { align: -1, color: COL.dim, shadow: false });
+    text("RETIRED " + r.age, 10 + lw - 8, y, { align: 1, color: COL.bad, shadow: false });
+    y += 12;
+  });
+  o.aged.forEach(a => {
+    const up = a.now > a.was;
+    text(a.p.pos + " " + a.p.last.slice(0, 12), 18, y, { align: -1, color: COL.ink, shadow: false });
+    text((up ? "+" : "") + (a.now - a.was) + "  > " + a.now, 10 + lw - 8, y,
+         { align: 1, color: up ? COL.good : COL.bad, shadow: false });
+    y += 12;
+  });
+  if (!o.retired.length && !o.aged.length) text("NOTHING CHANGED", 10 + lw / 2, 60, { color: COL.dim });
+
+  const rx = 10 + lw + 10, rw = ARTW - rx - 10;
+  text("YOUR PICK — ONE OF THREE", rx, 34, { align: -1, color: COL.flood });
+  const cw = Math.round((rw - 12) / 3), ch = 118;
+  o.draft.forEach((p, i) => {
+    const x = rx + i * (cw + 6);
+    HOT.push({ id: "draft:" + i, x, y: 46, w: cw, h: ch });
+    const hot = Input.holdId === "draft:" + i;
+    panel(x, 46, cw, ch, hot ? COL.panelHi : COL.panel, COL.edge);
+    rect(x, 46, cw, 3, posColour(p.pos));
+    text(p.pos, x + cw / 2, 54, { scale: 2, color: posColour(p.pos) });
+    text(p.first, x + cw / 2, 74, { color: COL.dim, shadow: false });
+    text(p.last.slice(0, 10), x + cw / 2, 86, { color: COL.ink, shadow: false });
+    text("AGE " + p.age, x + cw / 2, 102, { color: COL.dim, shadow: false });
+    text(String(overallOf(p)), x + cw / 2, 118, { scale: 3, color: COL.ink });
+    text("CEILING " + p.pot, x + cw / 2, 138, { color: COL.flood, shadow: false });
+    const gap = p.pot - overallOf(p);
+    text(gap > 18 ? "RAW" : gap > 9 ? "PROJECT" : "READY NOW", x + cw / 2, 150,
+         { color: COL.dim, shadow: false });
+  });
+  text("HE TAKES THE JOB FROM WHOEVER IS WORST AT HIS POSITION.", rx + rw / 2, 172,
+       { color: "#5D707D", shadow: false });
+  button("pass", rx + rw / 2 - 60, 186, 120, 18, "SIGN NOBODY");
+}
+
+
 
 function drawTeams() {
   rect(0, 0, ARTW, ARTH, COL.night);
@@ -3226,7 +3998,11 @@ function handleTap(id) {
   Sound.blip();
 
   if (SCREEN === "title") {
-    if (id === "start") { PICK = { forOpponent: false, mine: null }; SCREEN = "teams"; }
+    if (id === "season") {
+      if (inSeason()) { SCREEN = "hub"; }
+      else { PICK = { forOpponent: false, mine: null, season: true }; SCREEN = "teams"; }
+    }
+    else if (id === "start") { PICK = { forOpponent: false, mine: null }; SCREEN = "teams"; }
     else if (id === "diff") { SETTINGS.diff = (SETTINGS.diff + 1) % DIFFS.length; saveSettings(); }
     else if (id === "qlen") { const o = [2, 3, 5, 8]; SETTINGS.quarter = o[(o.indexOf(SETTINGS.quarter) + 1) % o.length]; saveSettings(); }
     else if (id === "dir") { SETTINGS.driveRight = !SETTINGS.driveRight; fieldKey = ""; saveSettings(); }
@@ -3238,6 +4014,13 @@ function handleTap(id) {
     if (id === "back") { Sound.back(); if (PICK.forOpponent) { PICK.forOpponent = false; } else SCREEN = "title"; return; }
     if (id.startsWith("team:")) {
       const t = teamBy(id.slice(5));
+      if (PICK.season) {
+        // Picking your club is the whole of starting a career.
+        SETTINGS.team = t.ab; saveSettings();
+        newSeasonLeague(t.ab);
+        SCREEN = "hub";
+        return;
+      }
       if (!PICK.forOpponent) {
         PICK.mine = t; PICK.forOpponent = true;
         SETTINGS.team = t.ab; saveSettings();
@@ -3250,6 +4033,30 @@ function handleTap(id) {
     return;
   }
 
+  if (SCREEN === "hub") {
+    if (id === "kickoff") return kickOffSeasonGame();
+    if (id === "watch") { watchPlayoffs(); return; }
+    if (id === "roster") { SCREEN = "roster"; return; }
+    if (id === "table") { SCREEN = "table"; return; }
+    if (id === "offseason") { SCREEN = "offseason"; return; }
+    if (id === "quit") { SCREEN = "title"; G.play = null; G.st = null; return; }
+    return;
+  }
+  if (SCREEN === "roster" || SCREEN === "table") {
+    if (id === "back") { Sound.back(); SCREEN = "hub"; }
+    return;
+  }
+  if (SCREEN === "growth") { if (id === "hub") SCREEN = "hub"; return; }
+  if (SCREEN === "offseason") {
+    if (id === "hub") { SCREEN = "hub"; return; }
+    if (id === "pass") { passOnDraft(); saveLeague(); SCREEN = "hub"; return; }
+    if (id.startsWith("draft:")) {
+      const pick = LEAGUE.offseason.draft[+id.slice(6)];
+      if (pick) { signDraftPick(pick); Sound.first(); SCREEN = "hub"; }
+    }
+    return;
+  }
+
   const s = G.st;
   if (id.startsWith("play:")) { snapPlay(playById(id.slice(5))); return; }
   if (id === "punt") { punt(); return; }
@@ -3257,8 +4064,44 @@ function handleTap(id) {
   if (id === "xp") { beginTry(false); return; }
   if (id === "two") { beginTry(true); return; }
   if (id === "advance") { driveTimer = 0; advanceTheirDrive(); return; }
-  if (id === "again") { newGame(s.my.ab, s.opp.ab); return; }
-  if (id === "menu") { SCREEN = "title"; G.play = null; return; }
+  if (id === "again") {
+    if (s.season && inSeason()) { SCREEN = "growth"; G.play = null; G.st = null; return; }
+    newGame(s.my.ab, s.opp.ab); return;
+  }
+  if (id === "menu") {
+    if (s.season && inSeason()) { SCREEN = "growth"; G.play = null; G.st = null; return; }
+    SCREEN = "title"; G.play = null; return;
+  }
+}
+
+function kickOffSeasonGame() {
+  const fx = myFixture();
+  if (!fx) return;
+  const oppAb = fx[0] === LEAGUE.my ? fx[1] : fx[0];
+  newGame(LEAGUE.my, oppAb, {
+    myRoster: seasonRoster(), season: true,
+    // Your defence grade, expressed on the same scale team strength uses.
+    defStr: (LEAGUE.def - 55) / 6,
+  });
+  SCREEN = "game";
+  updateCamera(0, true);
+}
+
+// The play simulation wants a roster shaped the way `makeRoster` shapes one.
+// Your season men are that shape already; the defensive half is filled in from
+// your DEFENCE grade so the same object works for both callers.
+function seasonRoster() {
+  const R = LEAGUE.roster;
+  const rng = makeRNG((LEAGUE.year * 7919 + LEAGUE.week) >>> 0);
+  const shell = makeRoster(teamBy(LEAGUE.my), (LEAGUE.def * 131 + LEAGUE.year) >>> 0);
+  return { off: R.off, def: shell.def, k: R.k, rng };
+}
+
+// A playoff round you are not in still has to be played.
+function watchPlayoffs() {
+  advancePlayoffs(makeRNG((Date.now() & 0xffff) >>> 0));
+  saveLeague();
+  if (LEAGUE.phase === "offseason") SCREEN = "offseason";
 }
 
 function update(dt) {
@@ -3329,6 +4172,7 @@ function update(dt) {
         s.kick = null;
         if (wasXP) finishTry(good, 1);
         else if (good) {
+          if (s.season) { const kk = manLine(7); kk.kicks++; kk.made++; kk.xp += 22; }
           s.us += 3; say("FIELD GOAL IS GOOD", 1.4, "good"); Sound.score();
           if (burn(6)) { if (endOfQuarter()) return; }
           startTheirDrive(FIELD.oppGoal - 25);
@@ -3358,6 +4202,11 @@ function draw() {
   if (NEEDS_ROTATE) { drawRotatePrompt(); return; }
   if (SCREEN === "title") { drawTitle(); return; }
   if (SCREEN === "teams") { drawTeams(); return; }
+  if (SCREEN === "hub") { drawHub(); return; }
+  if (SCREEN === "roster") { drawRoster(); return; }
+  if (SCREEN === "table") { drawTable(); return; }
+  if (SCREEN === "growth") { drawGrowth(); return; }
+  if (SCREEN === "offseason") { drawOffseason(); return; }
   if (!G.st) return;
 
   buildField();

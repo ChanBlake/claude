@@ -62,6 +62,8 @@ function loadGame({ width = 844, height = 390, file = null } = {}) {
       fgDistance, inFGRange, update, draw, handleTap, hitTest, resize,
       textW, glyphRows, GLYPHS, ART, BALL_ART, clamp, FX, RUN_CYCLE,
       fieldX, fyAtScreen, scrX, scrY, driveRight, noteTendency,
+      overallOf, newSeasonLeague, signDraftPick, standings, makeSchedule, myFixture,
+      get LEAGUE() { return LEAGUE; }, get SCREEN2() { return SCREEN; },
       get SCREEN() { return SCREEN; }, set SCREEN(v) { SCREEN = v; },
       get SETTINGS() { return SETTINGS; },
       get RECORD() { return RECORD; },

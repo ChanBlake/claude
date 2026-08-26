@@ -511,6 +511,82 @@ section("7d. which way you attack");
   A.SETTINGS.driveRight = false;
 }
 
+section("7e. a career");
+{
+  // Two seasons through the real screens and the real phase machine. Everything
+  // here is an invariant that only breaks after an hour of play: a roster with a
+  // hole in it, a schedule that stops, a man who improves past his ceiling.
+  const rng = makeRNG(24680);
+  A.SCREEN = "title";
+  A.draw(); A.Input.tap = "season"; A.update(1 / 60);
+  A.draw(); A.Input.tap = "team:CSC"; A.update(1 / 60);
+  A.draw();
+  check("picking a club starts a career", A.SCREEN2 === "hub", A.SCREEN2);
+
+  let games = 0, bad = null, seasons = 0;
+  const L = () => A.LEAGUE;
+  const roster = () => L().roster.off.concat([L().roster.k]);
+
+  for (let guard = 0; guard < 400 && seasons < 2; guard++) {
+    A.draw();
+    if (A.SCREEN2 === "hub") {
+      if (A.HOT.find(b => b.id === "kickoff")) {
+        A.Input.tap = "kickoff"; A.update(1 / 60);
+        const st = A.G.st;
+        st.quarterLen = 45; st.clock = 45;
+        let n = 0;
+        while (st.phase !== "final" && n < 60 * 60 * 6) {
+          A.draw();
+          if (st.phase === "playcall") {
+            const o = A.HOT.filter(b => b.id.startsWith("play:"));
+            if (o.length) A.Input.tap = rng.pick(o).id;
+          } else if (st.phase === "presnap") A.Input.snap = true;
+          else if (st.phase === "try") A.Input.tap = "xp";
+          else if (st.phase === "kick" && st.kick && !st.kick.flight) A.resolveKick(rng.range(-2, 2), rng.range(0.7, 1));
+          else if (st.phase === "defense") A.Input.tap = "advance";
+          else if (st.phase === "live" && A.G.play) {
+            const sim = A.G.play;
+            if (sim.qbHasIt() && !sim.threw && sim.t > 1.4) {
+              const tg = sim.targets();
+              if (tg.length) { const r = rng.pick(tg); A.Input.throwTo = { x: r.x + r.vx * 0.5, y: r.y + r.vy * 0.5 }; }
+            } else { A.Input.steerX = 0; A.Input.steerY = 1; A.Input.sprint = true; }
+          }
+          A.update(1 / 60); n++;
+        }
+        if (st.phase !== "final") bad = bad || "a season game never finished";
+        games++;
+        A.draw(); A.Input.tap = "menu"; A.update(1 / 60);
+        A.draw();
+        if (A.SCREEN2 !== "growth") bad = bad || "no growth screen after a season game";
+        A.Input.tap = "hub"; A.update(1 / 60);
+      } else if (A.HOT.find(b => b.id === "watch")) { A.Input.tap = "watch"; A.update(1 / 60); }
+      else if (A.HOT.find(b => b.id === "offseason")) { A.Input.tap = "offseason"; A.update(1 / 60); }
+      else bad = bad || "the hub offered nothing to do";
+    } else if (A.SCREEN2 === "offseason") {
+      A.draw();
+      const o = L().offseason;
+      if (!o || o.draft.length !== 3) bad = bad || "no draft class";
+      A.Input.tap = "draft:" + rng.int(0, 2); A.update(1 / 60);
+      seasons++;
+    } else A.update(1 / 60);
+
+    // The invariants that matter, checked on every pass.
+    const R = roster();
+    if (R.some(p => !p)) bad = bad || "a hole in the roster";
+    if (R.some(p => A.overallOf(p) > p.pot + 0.5)) bad = bad || "a man past his own ceiling";
+    if (R.some(p => p.age < 18 || p.age > 45)) bad = bad || "an implausible age";
+  }
+
+  console.log(`   ${games} games over ${seasons} seasons; year ${L().year}, defence ${L().def}`);
+  check("a career runs without breaking", !bad, bad);
+  check("two seasons actually completed", seasons === 2, String(seasons));
+  check("you played a full schedule", games >= 12, String(games));
+  check("the roster is always eight men", roster().length === 8, String(roster().length));
+  const grew = roster().some(p => p.lvl > 0);
+  check("somebody improved by playing", grew, roster().map(p => p.lvl).join(","));
+  A.SCREEN = "title";
+}
+
 section("8. units");
 {
   check("field label reads from your side", A.fieldLabel(60, true) === "MIDFIELD", A.fieldLabel(60, true));

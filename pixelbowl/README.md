@@ -10,6 +10,37 @@ no build step, no dependencies, and no image or audio assets: every sprite is
 a character grid in source, the 5×7 font is a lookup table, the field is drawn
 procedurally, and all fifteen sounds are synthesised in the Web Audio API.
 
+## The season
+
+A career is eight clubs, a seven-week schedule where you play everyone once,
+four into the playoffs, and a Pixel Bowl. You pick a club and you keep it.
+
+**You manage the half of the game you actually play.** Seven skill players and a
+kicker, each a named person with an age, ratings, and a ceiling. There is no
+depth chart of defensive backs you can never put on the field — your defence is
+one number, a grade out of ninety-nine, and it is graded on outcomes: every
+opponent possession it ends without points. That is honest about the abstraction
+rather than hiding it behind a menu.
+
+**Men improve by doing.** Experience comes from what happened on the field and
+nothing else — a receiver you throw to gets better at catching and quicker off
+the line; a back who breaks tackles gets stronger; the men up front improve on
+the snaps where nobody got to your quarterback. Growth only ever moves the
+ratings the position lives on, so a lineman never develops soft hands for
+blocking well. Every point is named on the postgame screen.
+
+**And then they get old.** Under twenty-five a man gains on his own; past thirty
+he loses, his ceiling comes down with him, and eventually he goes. One draft
+pick an off-season, three prospects, and the right to sign nobody — a prospect
+takes the job from whoever is worst at his position, so signing one is a real
+decision rather than a formality.
+
+`node tools/career.js` plays a whole career headlessly — every game, every
+screen, every tap — because a season's bugs only surface after an hour of play,
+which is exactly the kind of bug a person should never be the one to find. It
+found a roster with a hole in it in the seventh year of a test career: retired
+players left `null` in the lineup and the hub drew straight into it.
+
 ## Playing it
 
 Open `index.html` on the phone — any static host, or a local one:
@@ -83,9 +114,10 @@ The game's own source is loaded under a DOM stub and driven exactly as the
 browser drives it, so the tests exercise shipping code rather than a copy.
 
 ```bash
-node tools/test.js        # 95 checks: termination, determinism, rules, balance
+node tools/test.js        # 101 checks: termination, determinism, rules, balance, a career
 node tools/skill.js       # the same games played by four different standards of thumb
 node tools/cpu.js         # points per drive for the opponent's simulated possession
+YEARS=12 node tools/career.js   # plays a twelve-season career through the real screens
 node tools/balance.js     # plays whole games, reports the numbers you'd feel
 node tools/drives.js      # where possessions start and what they produce
 node tools/plays.js       # a few hundred snaps of each play, low variance
